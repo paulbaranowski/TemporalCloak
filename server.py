@@ -43,7 +43,7 @@ def get_boundary_index(chunks):
     return None
 
 
-def bits_to_string2(bits, has_boundary=False):
+def bits_to_string(bits, has_boundary=False):
     completed = False
     boundary = Bits(BOUNDARY_BITS)
     # find the message boundary special chars
@@ -97,7 +97,7 @@ def main():
         bits.append("0b{bit}".format(bit=bit))
         # print(bits.bin)
         try:
-            decode_attempt, completed, end_pos = bits_to_string2(bits)
+            decode_attempt, completed, end_pos = bits_to_string(bits)
             # print(decode_attempt)
             # restart trying to decode
             if completed:
