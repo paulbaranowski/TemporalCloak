@@ -6,5 +6,5 @@ Time-Based Steganography
 cd <project_name>
 python3 -m venv venv
 source venv/bin/activate
-pip install bitstring
+pip install -r requirements.txt
 ```

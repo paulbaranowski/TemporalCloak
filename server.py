@@ -6,24 +6,18 @@ import BitCloakDecoding
 SERVER_ADDRESS = ('localhost', 1234)
 
 
-def receive_byte_with_time(sock, last_recv_time):
+def receive_byte(sock):
     try:
         # Receive the byte from the socket
         data = sock.recv(1)
         if not data:
             print("no data received")
-            return None, None
-
-        # Get the current time
-        current_time = time.monotonic()
-        # Calculate the time difference between the current and last received byte
-        time_diff = current_time - last_recv_time
-        # Return the byte and time difference
-        return time_diff, current_time
+            return False
+        return True
     except (OSError, ConnectionResetError, ConnectionAbortedError) as e:
         # Handle case where socket is no longer connected
         print("Socket error:", e)
-        return None, None
+        return False
 
 
 def main():
@@ -43,30 +37,15 @@ def main():
 
     # Receive the data and extract the secret message from the time delays
     cloak = BitCloakDecoding.BitCloakDecoding()
-    start_time = last_recv_time = time.monotonic()
+    cloak.start_timer()
     # throw away the first time diff
-    time_diff, last_recv_time = receive_byte_with_time(client_sock, last_recv_time)
+    receive_byte(client_sock)
+    cloak.mark_time()
     while True:
-        time_diff, last_recv_time = receive_byte_with_time(client_sock, last_recv_time)
-        # dont append obvious errors
-        if time_diff > 0.250:
-            continue
-        cloak.add_bit_by_delay(time_diff)
-        # print(bits.bin)
-        try:
-            decode_attempt, completed, end_pos = cloak.bits_to_message()
-            # print(decode_attempt)
-            # restart trying to decode
-            if completed:
-                print("Decoded message: {}".format(decode_attempt))
-                total_time = time.monotonic() - start_time
-                print("Total time: {}".format(total_time))
-                print("bits/second: {}".format(len(decode_attempt)*8/total_time))
-                start_time = time.monotonic()
-                # truncate the bits array and start again
-                cloak.jump_to_next_message()
-        except ValueError:
-            continue
+        if receive_byte(client_sock):
+            cloak.mark_time()
+        else:
+            break
 
     # When you're done, close the socket objects
     client_sock.close()

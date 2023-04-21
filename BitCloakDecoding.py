@@ -1,17 +1,26 @@
 from bitstring import Bits, BitStream, BitArray
 from BitCloakConst import BitCloakConst
+import time
 
 
 class BitCloakDecoding:
-    def __init__(self):
+    def __init__(self, debug=False):
         self._bits = BitStream()
         self._time_delays = []
         self._eom = None
         self._last_message = None
+        self._start_time = None
+        self._last_recv_time = None
+        self._debug = debug
+        self._completed = False
 
     @property
-    def bits(self):
+    def bits(self) -> BitStream:
         return self._bits
+
+    @property
+    def completed(self) -> bool:
+        return self._completed
 
     def add_bit_by_delay(self, delay: float) -> None:
         self._time_delays.append(delay)
@@ -37,7 +46,11 @@ class BitCloakDecoding:
 
     def decode(self, message: str) -> str:
         message_bytes = message.tobytes()
-        decoded_message = message_bytes.decode('ascii')
+        try:
+            decoded_message = message_bytes.decode('ascii')
+        except UnicodeDecodeError:
+            return ""
+        self.log(decoded_message)
         return decoded_message
 
     def bits_to_message(self):
@@ -60,6 +73,45 @@ class BitCloakDecoding:
         self._last_message = self.decode(message)
         return self._last_message, completed, end_pos
 
-    def jump_to_next_message(self):
+    def jump_to_next_message(self) -> None:
         # print("EOM: {}".format(self._eom))
         self._bits = self._bits[self._eom:]
+
+    # Call this when you get the first chunk of data
+    def start_timer(self) -> None:
+        self._start_time = self._last_recv_time = time.monotonic()
+
+    def log(self, msg):
+        if self._debug:
+            print(msg)
+
+    # call this when you get a chunk of data
+    # it automatically adds the bit to the received message
+    # will automatically print out the message if it finds a completed message
+    def mark_time(self) -> float:
+        # Get the current time
+        current_time = time.monotonic()
+        # Calculate the time difference between the current and last received byte
+        time_diff = current_time - self._last_recv_time
+        # Update last received time
+        self._last_recv_time = current_time
+        # Add the bit to the message
+        self.add_bit_by_delay(time_diff)
+        #self.log(self._bits.bin)
+        # Try to decode the message
+        decode_attempt, self._completed, end_pos = self.bits_to_message()
+        # print(decode_attempt)
+        if self._completed:
+            # we got the whole message!
+            self.display_completed(decode_attempt)
+        # Return time difference
+        return time_diff
+
+    def display_completed(self, decode_attempt: str) -> None:
+        print("Decoded message: {}".format(decode_attempt))
+        total_time = time.monotonic() - self._start_time
+        print("Total time: {}".format(total_time))
+        print("bits/second: {}".format(len(decode_attempt) * 8 / total_time))
+        start_time = time.monotonic()
+        # truncate the bits array and start again
+        self.jump_to_next_message()
