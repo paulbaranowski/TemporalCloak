@@ -27,25 +27,25 @@ class TemporalCloakEncoding:
     def bits(self):
         return self._message_bits
 
+    @staticmethod
+    def encode_message(msg: str):
+        try:
+            return True, msg.encode('ascii')
+        except UnicodeEncodeError:
+            print(f"Failed to encode message '{msg}'")
+            return False, ''
+
+
     @message.setter
     def message(self, value: str) -> None:
         self._message = value
-        self._message_encoded = self._message.encode('ascii')
+        _, self._message_encoded = TemporalCloakEncoding.encode_message(self._message)
         self._message_bits = BitArray(self._message_encoded)
         print("Message bits: {}".format(self._message_bits))
         self._message_bits_padded = BitArray(self._message_bits)
         self._message_bits_padded.prepend(TemporalCloakConst.BOUNDARY_BITS)
         print("Message bits with boundary: {}".format(self._message_bits_padded))
         self.generate_delays()
-
-    # def generate_delays_random(self) -> list:
-    #     for bit in self._message_bits_padded:
-    #         if bit == 1:
-    #             delay = random.uniform(TemporalCloakConst.BIT_1_LOWER_BOUND, TemporalCloakConst.BIT_1_UPPER_BOUND)
-    #         else:
-    #             delay = random.uniform(TemporalCloakConst.BIT_0_LOWER_BOUND, TemporalCloakConst.BIT_0_UPPER_BOUND)
-    #         self._delays.append(delay)
-    #     return self._delays
 
     def generate_delays(self) -> list:
         for bit in self._message_bits_padded:

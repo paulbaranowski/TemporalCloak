@@ -1,6 +1,7 @@
 import requests
 from TemporalCloakDecoding import TemporalCloakDecoding
 from TemporalCloakConst import TemporalCloakConst
+import humanize
 
 url = 'http://localhost:8888'
 
@@ -20,3 +21,4 @@ for chunk in response.iter_content(chunk_size=TemporalCloakConst.CHUNK_SIZE_TORN
             cloak.mark_time()
         # print(len(chunk))
 print("Total bytes received: {}".format(str(total_bytes)))
+print("Total bytes received: {}".format(humanize.naturalsize(total_bytes, True, False, "%.2f")))

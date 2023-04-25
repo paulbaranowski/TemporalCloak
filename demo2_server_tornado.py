@@ -5,6 +5,8 @@ import os
 import random
 import json
 from TemporalCloakEncoding import TemporalCloakEncoding
+from TemporalCloakConst import TemporalCloakConst
+import humanize
 
 
 def get_random_quote() -> str:
@@ -25,17 +27,13 @@ def get_random_quote() -> str:
     return f"{quote_text}{quote_author}"
 
 
-def size_in_mb(num_bytes):
-    return "{} MB".format(round(num_bytes / (1024 * 1024), 2))
-
-
 def get_random_file() -> str:
     directory = "content/images/"  # replace with your directory path
     files = os.listdir(directory)
     random_file = random.choice(files)
     full_path = os.path.join(directory, random_file)
     file_size = os.path.getsize(full_path)
-    print("Size: {}  Path: {}".format(size_in_mb(file_size), full_path))
+    print("Size: {}  Path: {}".format(humanize.naturalsize(file_size, True, False,  "%.2f"), full_path))
     return full_path, file_size
 
 
@@ -49,26 +47,30 @@ class MainHandler(tornado.web.RequestHandler):
         full_path, file_size = get_random_file()
         f = open(full_path, "rb")
 
-        # Get a random quote
-        quote = get_random_quote()
+        # Get a random quote - sometimes encoding in the file is messed up so we need to keep trying
+        got_quote = False
+        while not got_quote:
+            quote = get_random_quote()
+            got_quote, _ = TemporalCloakEncoding.encode_message(quote)
+
         print(quote)
         cloak = TemporalCloakEncoding()
         cloak.message = quote
         delays = cloak.delays
 
         while True:
-            byte = f.read(100)
-            if not byte:
+            bytes = f.read(TemporalCloakConst.CHUNK_SIZE_TORNADO)
+            if not bytes:
                 break
             if len(delays) > 0:
                 delay = delays.pop(0)
                 await tornado.ioloop.IOLoop.current().run_in_executor(None, time.sleep, delay)
-            self.write(byte)
+            self.write(bytes)
             try:
                 await self.flush()
             except tornado.iostream.StreamClosedError:
                 break
-        print("Sent {} ({})".format(full_path, size_in_mb(file_size)))
+        print("Sent {} ({})".format(full_path, humanize.naturalsize(file_size, True, False, "%.2f")))
 
 
 if __name__ == "__main__":

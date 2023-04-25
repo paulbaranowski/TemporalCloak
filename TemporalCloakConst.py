@@ -16,4 +16,5 @@ class TemporalCloakConst:
 
     # This is used for the size of the data chunk sent by the server.
     # Without chunking the data, the download speed will be too slow.
-    CHUNK_SIZE_TORNADO = 4096
+    CHUNK_SIZE_TORNADO = 256
+
