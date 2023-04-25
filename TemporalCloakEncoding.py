@@ -16,6 +16,10 @@ class TemporalCloakEncoding:
         return self._message
 
     @property
+    def byte_len(self):
+        return len(self._message_encoded)
+
+    @property
     def delays(self):
         return self._delays
 
@@ -52,3 +56,12 @@ class TemporalCloakEncoding:
             self._delays.append(delay)
         # print(self._delays)
         return self._delays
+
+    def __str__(self):
+        result = "Message: '{}'\n".format(self.message)
+        result += "Num bytes: {}\n".format(self.byte_len)
+        result += "Message bits: {}\n".format(self._message_bits)
+        return result
+
+    def __repr__(self):
+        return f"TemporalCloakEncoding(message='{self.message}')"

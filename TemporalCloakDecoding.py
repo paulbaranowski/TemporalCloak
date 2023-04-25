@@ -30,11 +30,19 @@ class TemporalCloakDecoding:
         else:
             self.add_bit(0)
 
-    def add_bit(self, bit: bool) -> None:
-        self._bits.append("0b{bit}".format(bit=bit))
-        # print(self._bits.bin)
+    # @param bit must be 1 or 0
+    def add_bit(self, bit: int) -> None:
+        if bit in [0, 1]:
+            self._bits.append("0b{bit}".format(bit=bit))
+        else:
+            raise ValueError("add_bit: argument 'bit' should be 1 or 0")
 
-    def find_boundary(self, bits: BitStream, start_pos=0) -> int:
+    # bits must be in the format "0b..."
+    def add_bits(self, bits: str) -> None:
+        self._bits.append(bits)
+
+    @staticmethod
+    def find_boundary(bits: BitStream, start_pos=0) -> int:
         boundary = Bits(TemporalCloakConst.BOUNDARY_BITS)
         # the "find" function returns a tuple which only has data in it if it was successful
         # it will return (<num>,) if it found something, otherwise ()
@@ -55,13 +63,13 @@ class TemporalCloakDecoding:
 
     def bits_to_message(self):
         completed = False
-        begin_pos = self.find_boundary(self._bits)
+        begin_pos = TemporalCloakDecoding.find_boundary(self._bits)
         if begin_pos is None:
             self._eom = None
             return "", False, None
         begin_pos += len(BitArray(TemporalCloakConst.BOUNDARY_BITS))
         # print("Found boundary at {}".format(begin_pos))
-        end_pos = self.find_boundary(self._bits, begin_pos)
+        end_pos = TemporalCloakDecoding.find_boundary(self._bits, begin_pos)
         if end_pos is not None:
             # print('found end pos {}'.format(end_pos))
             completed = True
@@ -115,3 +123,11 @@ class TemporalCloakDecoding:
         start_time = time.monotonic()
         # truncate the bits array and start again
         self.jump_to_next_message()
+
+    def __str__(self):
+        result = "Current bits: '{}'\n".format(self._bits)
+        result += "Completed: {}\n".format(self._completed)
+        return result
+
+    def __repr__(self):
+        return f"TemporalCloakDecoding(bits='{self._bits}', completed='{self._completed}')"

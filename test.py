@@ -17,9 +17,9 @@ class TestTemporalCloakDecoding(unittest.TestCase):
         self.assertEqual(self.decoding.bits, BitStream('0b1'))
 
     def test_add_bit_by_delay(self):
-        self.decoding.add_bit_by_delay(TemporalCloakConst.BIT_1_LOWER_BOUND)
+        self.decoding.add_bit_by_delay(TemporalCloakConst.BIT_1_TIME_DELAY)
         self.assertEqual(self.decoding.bits, BitStream('0b1'))
-        self.decoding.add_bit_by_delay(TemporalCloakConst.BIT_0_LOWER_BOUND)
+        self.decoding.add_bit_by_delay(TemporalCloakConst.BIT_0_TIME_DELAY)
         self.assertEqual(self.decoding.bits, BitStream('0b10'))
 
     def test_find_boundary(self):
@@ -41,22 +41,22 @@ class TestTemporalCloakDecoding(unittest.TestCase):
 
 class TestFindBoundary(unittest.TestCase):
     def setUp(self):
-        self.my_obj = TemporalCloakDecoding()
+        # self.my_obj = TemporalCloakDecoding()
         self.bits_with_boundary = BitArray('0b0101010101') + BitArray(TemporalCloakConst.BOUNDARY_BITS) + BitArray('0b0101010101')
         self.bits_with_two_boundaries = BitArray('0b0101010101') + BitArray(TemporalCloakConst.BOUNDARY_BITS) + BitArray('0b0101010101') + BitArray(TemporalCloakConst.BOUNDARY_BITS)
         self.bits_without_boundary = BitArray('0b0101010101010101010101010101')
 
     def test_boundary_found(self):
-        result = self.my_obj.find_boundary(self.bits_with_boundary)
+        result = TemporalCloakDecoding.find_boundary(self.bits_with_boundary)
         self.assertEqual(result, 10)
 
     def test_boundary_not_found(self):
-        result = self.my_obj.find_boundary(self.bits_without_boundary)
+        result = TemporalCloakDecoding.find_boundary(self.bits_without_boundary)
         self.assertIsNone(result)
 
     def test_two_boundaries(self):
-        first = self.my_obj.find_boundary(self.bits_with_two_boundaries)+1
-        second = self.my_obj.find_boundary(self.bits_with_two_boundaries, first)
+        first = TemporalCloakDecoding.find_boundary(self.bits_with_two_boundaries)+1
+        second = TemporalCloakDecoding.find_boundary(self.bits_with_two_boundaries, first)
         # 10 + 16 + 10 + 16 = 52
         self.assertEqual(second, 36)
 
