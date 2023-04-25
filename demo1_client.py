@@ -2,7 +2,7 @@ import socket
 import time
 import random
 import sys
-import BitCloakEncoding
+from TemporalCloakEncoding import TemporalCloakEncoding
 
 
 def get_secret_message() -> str:
@@ -11,7 +11,7 @@ def get_secret_message() -> str:
     return input("Enter secret message to be transmitted: ")
 
 
-def send_byte_with_delay(sock, delay):
+def send_byte_with_delay(sock, delay: float) -> None:
     # Generate a random byte
     byte = bytes([random.randint(0, 255)])
 
@@ -25,7 +25,7 @@ def send_byte_with_delay(sock, delay):
         sys.exit(1)
 
 
-def send_message(sock: socket.socket, delays):
+def send_message(sock: socket.socket, delays: list) -> None:
     # Send each bit with a time delay between each byte
     for delay in delays:
         send_byte_with_delay(sock, delay)
@@ -43,7 +43,7 @@ def main():
     port = 1234
 
     message = get_secret_message()
-    cloak = BitCloakEncoding.BitCloakEncoding()
+    cloak = TemporalCloakEncoding()
     cloak.message = message
     with connect_to_server(host, port) as sock:
         while True:

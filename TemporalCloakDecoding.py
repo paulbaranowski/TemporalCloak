@@ -1,9 +1,9 @@
 from bitstring import Bits, BitStream, BitArray
-from BitCloakConst import BitCloakConst
+from TemporalCloakConst import TemporalCloakConst
 import time
 
 
-class BitCloakDecoding:
+class TemporalCloakDecoding:
     def __init__(self, debug=False):
         self._bits = BitStream()
         self._time_delays = []
@@ -25,7 +25,7 @@ class BitCloakDecoding:
     def add_bit_by_delay(self, delay: float) -> None:
         self._time_delays.append(delay)
         # print(self._time_delays)
-        if delay <= BitCloakConst.MIDPOINT_TIME:
+        if delay <= TemporalCloakConst.MIDPOINT_TIME:
             self.add_bit(1)
         else:
             self.add_bit(0)
@@ -35,7 +35,7 @@ class BitCloakDecoding:
         # print(self._bits.bin)
 
     def find_boundary(self, bits: BitStream, start_pos=0) -> int:
-        boundary = Bits(BitCloakConst.BOUNDARY_BITS)
+        boundary = Bits(TemporalCloakConst.BOUNDARY_BITS)
         # the "find" function returns a tuple which only has data in it if it was successful
         # it will return (<num>,) if it found something, otherwise ()
         pos = bits.find(boundary, start_pos)
@@ -59,7 +59,7 @@ class BitCloakDecoding:
         if begin_pos is None:
             self._eom = None
             return "", False, None
-        begin_pos += len(BitArray(BitCloakConst.BOUNDARY_BITS))
+        begin_pos += len(BitArray(TemporalCloakConst.BOUNDARY_BITS))
         # print("Found boundary at {}".format(begin_pos))
         end_pos = self.find_boundary(self._bits, begin_pos)
         if end_pos is not None:

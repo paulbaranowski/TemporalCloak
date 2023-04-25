@@ -1,13 +1,13 @@
 import unittest
-from BitCloakConst import BitCloakConst
-from BitCloakDecoding import BitCloakDecoding
+from TemporalCloakConst import TemporalCloakConst
+from TemporalCloakDecoding import TemporalCloakDecoding
 from bitstring import Bits, BitArray, BitStream
 
 
-class TestBitCloakDecoding(unittest.TestCase):
+class TestTemporalCloakDecoding(unittest.TestCase):
 
     def setUp(self):
-        self.decoding = BitCloakDecoding()
+        self.decoding = TemporalCloakDecoding()
         # "hello" with the boundary bits in front and back, plus random bytes after
         self.test_bits = BitStream('0x0xff0068656c6c6fff006865')
         self.test_message = 'hello'
@@ -17,9 +17,9 @@ class TestBitCloakDecoding(unittest.TestCase):
         self.assertEqual(self.decoding.bits, BitStream('0b1'))
 
     def test_add_bit_by_delay(self):
-        self.decoding.add_bit_by_delay(BitCloakConst.BIT_1_LOWER_BOUND)
+        self.decoding.add_bit_by_delay(TemporalCloakConst.BIT_1_LOWER_BOUND)
         self.assertEqual(self.decoding.bits, BitStream('0b1'))
-        self.decoding.add_bit_by_delay(BitCloakConst.BIT_0_LOWER_BOUND)
+        self.decoding.add_bit_by_delay(TemporalCloakConst.BIT_0_LOWER_BOUND)
         self.assertEqual(self.decoding.bits, BitStream('0b10'))
 
     def test_find_boundary(self):
@@ -41,9 +41,9 @@ class TestBitCloakDecoding(unittest.TestCase):
 
 class TestFindBoundary(unittest.TestCase):
     def setUp(self):
-        self.my_obj = BitCloakDecoding()
-        self.bits_with_boundary = BitArray('0b0101010101') + BitArray(BitCloakConst.BOUNDARY_BITS) + BitArray('0b0101010101')
-        self.bits_with_two_boundaries = BitArray('0b0101010101') + BitArray(BitCloakConst.BOUNDARY_BITS) + BitArray('0b0101010101') + BitArray(BitCloakConst.BOUNDARY_BITS)
+        self.my_obj = TemporalCloakDecoding()
+        self.bits_with_boundary = BitArray('0b0101010101') + BitArray(TemporalCloakConst.BOUNDARY_BITS) + BitArray('0b0101010101')
+        self.bits_with_two_boundaries = BitArray('0b0101010101') + BitArray(TemporalCloakConst.BOUNDARY_BITS) + BitArray('0b0101010101') + BitArray(TemporalCloakConst.BOUNDARY_BITS)
         self.bits_without_boundary = BitArray('0b0101010101010101010101010101')
 
     def test_boundary_found(self):

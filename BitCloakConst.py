@@ -1,8 +1,0 @@
-class BitCloakConst:
-    BIT_1_LOWER_BOUND = 0.00
-    BIT_1_UPPER_BOUND = 0.1
-    BIT_0_LOWER_BOUND = 0.05
-    BIT_0_UPPER_BOUND = 0.25
-    MIDPOINT_TIME = 0.03
-    BOUNDARY_BITS = "0xFF00"
-

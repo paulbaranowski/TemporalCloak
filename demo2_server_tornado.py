@@ -4,7 +4,7 @@ import time
 import os
 import random
 import json
-from BitCloakEncoding import BitCloakEncoding
+from TemporalCloakEncoding import TemporalCloakEncoding
 
 
 def get_random_quote() -> str:
@@ -19,9 +19,10 @@ def get_random_quote() -> str:
     # Extract the quote text and author from the chosen quote
     quote_text = random_quote["quoteText"]
     quote_author = random_quote["quoteAuthor"]
-
+    if quote_author.strip() != "":
+        quote_author = " - "+quote_author
     # Display the chosen quote
-    return f"{quote_text} - {quote_author}"
+    return f"{quote_text}{quote_author}"
 
 
 def size_in_mb(num_bytes):
@@ -51,7 +52,7 @@ class MainHandler(tornado.web.RequestHandler):
         # Get a random quote
         quote = get_random_quote()
         print(quote)
-        cloak = BitCloakEncoding()
+        cloak = TemporalCloakEncoding()
         cloak.message = quote
         delays = cloak.delays
 
@@ -76,5 +77,5 @@ if __name__ == "__main__":
     app = tornado.web.Application([
         (r"/", MainHandler),
     ])
-    app.listen(8888)
+    app.listen(PORT)
     tornado.ioloop.IOLoop.current().start()

@@ -1,6 +1,5 @@
 import socket
-import time
-import BitCloakDecoding
+from TemporalCloakDecoding import TemporalCloakDecoding
 
 # Define the server address and port
 SERVER_ADDRESS = ('localhost', 1234)
@@ -36,7 +35,7 @@ def main():
     print('client connected:', client_addr)
 
     # Receive the data and extract the secret message from the time delays
-    cloak = BitCloakDecoding.BitCloakDecoding()
+    cloak = TemporalCloakDecoding()
     cloak.start_timer()
     # throw away the first time diff
     receive_byte(client_sock)
