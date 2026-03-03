@@ -1,0 +1,12 @@
+[project]
+name = "temporalcloak"
+version = "0.1.0"
+description = "Time-Based Steganography"
+requires-python = ">=3.13"
+dependencies = [
+    "bitstring",
+    "tornado",
+    "requests",
+    "rich",
+    "humanize",
+]

@@ -1,5 +1,0 @@
-bitstring
-tornado
-requests
-rich
-humanize

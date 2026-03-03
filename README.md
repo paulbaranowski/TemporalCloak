@@ -4,9 +4,7 @@ Time-Based Steganography
 ## Install
 ```
 cd <project_name>
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+uv sync
 ```
 ## Usage
 
@@ -20,11 +18,11 @@ time differences between bytes.
 
 Start the server with:
 ```
-python demo1_server.py
+uv run demo1_server.py
 ```
 Then run the client:
 ```
-python demo1_client.py
+uv run demo1_client.py
 ```
 
 
@@ -40,18 +38,18 @@ The web server is based on Tornado.
 
 Start up the server:
 ```
-python demo2_server_tornado.py
+uv run demo2_server_tornado.py
 ```
 Now you can go to http://localhost:8888 and see an image.
 
 Now run the client:
 ```
-python demo2_client_tornado.py
+uv run demo2_client_tornado.py
 ```
 
 ## Testing
 ```
-python test.py
+uv run test.py
 ```
 
 ## Acknowledgements
