@@ -1,9 +1,12 @@
 from bitstring import Bits, BitStream, BitArray
 from TemporalCloakConst import TemporalCloakConst
 import time
+import warnings
 
 
 class TemporalCloakDecoding:
+    BOUNDARY_LEN = len(BitArray(TemporalCloakConst.BOUNDARY_BITS))
+
     def __init__(self, debug=False):
         self._bits = BitStream()
         self._time_delays = []
@@ -13,6 +16,9 @@ class TemporalCloakDecoding:
         self._last_recv_time = None
         self._debug = debug
         self._completed = False
+        self._adaptive_threshold = None
+        self._confidence_scores = []
+        self._checksum_valid = None
 
     @property
     def bits(self) -> BitStream:
@@ -22,13 +28,36 @@ class TemporalCloakDecoding:
     def completed(self) -> bool:
         return self._completed
 
+    @property
+    def checksum_valid(self):
+        """True if last completed message passed checksum, False if failed, None if not yet checked."""
+        return self._checksum_valid
+
+    @property
+    def threshold(self) -> float:
+        """Return the adaptive threshold if calibrated, otherwise the fixed constant."""
+        if self._adaptive_threshold is not None:
+            return self._adaptive_threshold
+        return TemporalCloakConst.MIDPOINT_TIME
+
+    @property
+    def confidence_scores(self) -> list:
+        return self._confidence_scores
+
     def add_bit_by_delay(self, delay: float) -> None:
         self._time_delays.append(delay)
-        # print(self._time_delays)
-        if delay <= TemporalCloakConst.MIDPOINT_TIME:
+        threshold = self.threshold
+        if delay <= threshold:
             self.add_bit(1)
         else:
             self.add_bit(0)
+        # Track confidence: how far the delay is from the decision boundary
+        distance = abs(delay - threshold)
+        confidence = min(distance / threshold, 1.0) if threshold > 0 else 1.0
+        self._confidence_scores.append(confidence)
+        if confidence < 0.2:
+            self.log(f"Low confidence bit at index {len(self._bits)-1}: "
+                     f"delay={delay:.4f}s, threshold={threshold:.4f}s, confidence={confidence:.2f}")
 
     # @param bit must be 1 or 0
     def add_bit(self, bit: int) -> None:
@@ -52,7 +81,30 @@ class TemporalCloakDecoding:
         begin_pos = pos[0]
         return begin_pos
 
-    def decode(self, message: str) -> str:
+    @staticmethod
+    def verify_checksum(payload_bits, checksum_bits) -> bool:
+        """Verify the 8-bit XOR checksum against the payload."""
+        payload_bytes = payload_bits.tobytes()
+        computed = 0
+        for byte in payload_bytes:
+            computed ^= byte
+        return computed == checksum_bits.uint
+
+    def decode(self, message, completed=False) -> str:
+        """Decode message bits to string. If completed, the last 8 bits are
+        treated as an XOR checksum and verified."""
+        if completed and len(message) > 8:
+            payload_bits = message[:-8]
+            checksum_bits = message[-8:]
+            if not self.verify_checksum(payload_bits, checksum_bits):
+                warnings.warn("Checksum mismatch — message may be corrupted")
+                self._checksum_valid = False
+            else:
+                self._checksum_valid = True
+            message = payload_bits
+        else:
+            self._checksum_valid = None
+
         message_bytes = message.tobytes()
         try:
             decoded_message = message_bytes.decode('ascii')
@@ -61,24 +113,60 @@ class TemporalCloakDecoding:
         self.log(decoded_message)
         return decoded_message
 
+    def calibrate_from_boundary(self) -> None:
+        """Use the first boundary marker (0xFF00 = 8 ones then 8 zeros) as a
+        calibration preamble. Compute the average observed delay for each group
+        and set the adaptive threshold to their midpoint."""
+        if len(self._time_delays) < self.BOUNDARY_LEN:
+            return
+        ones_delays = self._time_delays[0:8]    # 0xFF = 8 ones
+        zeros_delays = self._time_delays[8:16]  # 0x00 = 8 zeros
+        avg_one = sum(ones_delays) / len(ones_delays)
+        avg_zero = sum(zeros_delays) / len(zeros_delays)
+        self._adaptive_threshold = (avg_one + avg_zero) / 2.0
+        self.log(f"Calibrated threshold: {self._adaptive_threshold:.4f}s "
+                 f"(avg_one={avg_one:.4f}s, avg_zero={avg_zero:.4f}s)")
+        # Re-classify all bits with the calibrated threshold
+        self._bits = BitStream()
+        self._confidence_scores = []
+        for delay in self._time_delays:
+            threshold = self._adaptive_threshold
+            if delay <= threshold:
+                self.add_bit(1)
+            else:
+                self.add_bit(0)
+            distance = abs(delay - threshold)
+            confidence = min(distance / threshold, 1.0) if threshold > 0 else 1.0
+            self._confidence_scores.append(confidence)
+
     def bits_to_message(self):
+        # Attempt calibration once we have enough bits for the boundary
+        if self._adaptive_threshold is None and len(self._time_delays) >= self.BOUNDARY_LEN:
+            self.calibrate_from_boundary()
+
         completed = False
         begin_pos = TemporalCloakDecoding.find_boundary(self._bits)
         if begin_pos is None:
             self._eom = None
             return "", False, None
-        begin_pos += len(BitArray(TemporalCloakConst.BOUNDARY_BITS))
-        # print("Found boundary at {}".format(begin_pos))
+        begin_pos += self.BOUNDARY_LEN
         end_pos = TemporalCloakDecoding.find_boundary(self._bits, begin_pos)
         if end_pos is not None:
-            # print('found end pos {}'.format(end_pos))
             completed = True
             self._eom = end_pos
             message = self._bits[begin_pos:end_pos]
         else:
             self._eom = None
             message = self._bits[begin_pos:]
-        self._last_message = self.decode(message)
+
+        # Bit alignment check
+        if completed and len(message) % 8 != 0:
+            warnings.warn(
+                f"Message bits ({len(message)}) not aligned to 8-bit boundary. "
+                f"Possible bit corruption."
+            )
+
+        self._last_message = self.decode(message, completed)
         return self._last_message, completed, end_pos
 
     def jump_to_next_message(self) -> None:
@@ -116,11 +204,14 @@ class TemporalCloakDecoding:
         return time_diff
 
     def display_completed(self, decode_attempt: str) -> None:
+        if not decode_attempt:
+            # Empty message between consecutive boundaries — skip display
+            self.jump_to_next_message()
+            return
         print("Decoded message: {}".format(decode_attempt))
         total_time = time.monotonic() - self._start_time
         print("Total time: {}".format(total_time))
         print("bits/second: {}".format(len(decode_attempt) * 8 / total_time))
-        start_time = time.monotonic()
         # truncate the bits array and start again
         self.jump_to_next_message()
 

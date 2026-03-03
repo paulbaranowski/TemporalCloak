@@ -58,11 +58,15 @@ class MainHandler(tornado.web.RequestHandler):
         cloak.message = quote
         delays = cloak.delays
 
+        # Send the first chunk immediately (sync chunk — no encoded delay)
+        first_chunk = True
         while True:
             bytes = f.read(TemporalCloakConst.CHUNK_SIZE_TORNADO)
             if not bytes:
                 break
-            if len(delays) > 0:
+            if first_chunk:
+                first_chunk = False
+            elif len(delays) > 0:
                 delay = delays.pop(0)
                 await tornado.ioloop.IOLoop.current().run_in_executor(None, time.sleep, delay)
             self.write(bytes)

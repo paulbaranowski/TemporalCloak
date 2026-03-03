@@ -3,11 +3,11 @@ class TemporalCloakConst:
     BIT_1_TIME_DELAY = 0.00
 
     # The time delay for a "0" bit
-    BIT_0_TIME_DELAY = 0.05
+    BIT_0_TIME_DELAY = 0.10
 
     # Due to network delays, the times sent will not be exact.
     # This is the value used to separate a bit "0" from a "1".
-    MIDPOINT_TIME = 0.03
+    MIDPOINT_TIME = 0.05
 
     # These are used to indicate the separation between messages.
     # If bits are dropped or missed, the message receiver can look

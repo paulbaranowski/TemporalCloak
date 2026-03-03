@@ -36,10 +36,9 @@ def main():
 
     # Receive the data and extract the secret message from the time delays
     cloak = TemporalCloakDecoding()
-    cloak.start_timer()
-    # throw away the first time diff
+    # Discard the sync byte (connection overhead), then start timing
     receive_byte(client_sock)
-    cloak.mark_time()
+    cloak.start_timer()
     while True:
         if receive_byte(client_sock):
             cloak.mark_time()

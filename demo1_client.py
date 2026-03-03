@@ -46,6 +46,8 @@ def main():
     cloak = TemporalCloakEncoding()
     cloak.message = message
     with connect_to_server(host, port) as sock:
+        # Send a sync byte so the server can discard connection overhead
+        send_byte_with_delay(sock, 0.1)
         while True:
             send_message(sock, cloak.delays)
     response = sock.recv(1024)
