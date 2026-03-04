@@ -168,7 +168,25 @@ sudo certbot certonly --standalone -d yourdomain.com
 #   privkey.pem    — private key
 ```
 
-### 4.2 Auto-Renewal
+### 4.2 Grant Certificate Access to the App User
+
+Let's Encrypt certs are owned by root. The `temporalcloak` user needs read access to load them at startup:
+
+```bash
+# Allow traversal into the live/ and archive/ directories
+sudo chmod 750 /etc/letsencrypt/live/
+sudo chmod 750 /etc/letsencrypt/archive/
+sudo chmod 750 /etc/letsencrypt/live/yourdomain.com/
+sudo chmod 750 /etc/letsencrypt/archive/yourdomain.com/
+
+# Grant group read on the private key (the most restrictive file)
+sudo chgrp temporalcloak /etc/letsencrypt/live/yourdomain.com/
+sudo chgrp temporalcloak /etc/letsencrypt/archive/yourdomain.com/
+sudo chgrp temporalcloak /etc/letsencrypt/archive/yourdomain.com/*
+sudo chmod 640 /etc/letsencrypt/archive/yourdomain.com/privkey*.pem
+```
+
+### 4.3 Auto-Renewal
 
 ```bash
 # Certbot auto-renews via systemd timer (installed by default)
