@@ -6,7 +6,7 @@ from temporal_cloak.encoding import TemporalCloakEncoding
 class QuoteProvider:
     def __init__(self, quotes_path: str = "content/quotes/quotes.json"):
         self._quotes_path = quotes_path
-        with open(quotes_path, "r", encoding="Windows-1252") as f:
+        with open(quotes_path, "r", encoding="utf-8") as f:
             self._quotes = json.load(f)
 
     @property
