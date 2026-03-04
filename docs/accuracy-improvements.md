@@ -20,7 +20,7 @@ Both demos measure the time from `start_timer()` to the first data arrival. This
 
 **Demo 1** (`demo1_server.py` lines 39-42): The comment says "throw away the first time diff" but `mark_time()` is still called, recording it as a real bit.
 
-**Demo 2** (`demo2_client_tornado.py` lines 14-21): The first `mark_time()` measures HTTP overhead + first encoded delay, conflating them.
+**Demo 2** (`temporal_cloak_cli_decoder.py` lines 14-21): The first `mark_time()` measures HTTP overhead + first encoded delay, conflating them.
 
 ### 3. Narrow Timing Margin
 
@@ -50,7 +50,7 @@ Setting `message` twice on the same `TemporalCloakEncoding` instance appends del
 
 ### 7. Chunk Byte Counting Bug (Demo 2)
 
-`demo2_client_tornado.py` line 17 always adds `CHUNK_SIZE_TORNADO` (256) even for the final smaller chunk. This overcounts total bytes received.
+`temporal_cloak_cli_decoder.py` line 17 always adds `CHUNK_SIZE_TORNADO` (256) even for the final smaller chunk. This overcounts total bytes received.
 
 ### 8. No Bit Alignment Check
 
@@ -95,7 +95,7 @@ Client: send a sync byte + 0.1s pause before the encoded message loop, so the se
 
 #### 1c. Fix First-Bit Handling in Demo 2
 
-**Files:** `demo2_server_tornado.py`, `demo2_client_tornado.py`
+**Files:** `temporal_cloak_web_demo.py`, `temporal_cloak_cli_decoder.py`
 
 Server: send the first chunk without any delay (sync chunk), then apply encoded delays from the second chunk onward.
 
@@ -121,7 +121,7 @@ Clear `self._delays = []` in the `message` setter before calling `generate_delay
 
 #### 1e. Fix Chunk Byte Counting
 
-**File:** `demo2_client_tornado.py`
+**File:** `temporal_cloak_cli_decoder.py`
 
 Change `total_bytes += TemporalCloakConst.CHUNK_SIZE_TORNADO` to `total_bytes += len(chunk)`.
 
@@ -250,8 +250,8 @@ Add an assertion in `encode_message()` that all bytes are < 0x80. Since the mess
 | `TemporalCloakDecoding.py` | Empty message guard, adaptive threshold, confidence scoring, checksum validation, bit alignment check |
 | `demo1_server.py` | Fix first-bit timing |
 | `demo1_client.py` | Add sync byte |
-| `demo2_server_tornado.py` | Sync first chunk |
-| `demo2_client_tornado.py` | Skip first chunk timing, fix byte counting |
+| `temporal_cloak_web_demo.py` | Sync first chunk |
+| `temporal_cloak_cli_decoder.py` | Skip first chunk timing, fix byte counting |
 | `test.py` | New tests for all changes |
 
 ## Verification

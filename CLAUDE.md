@@ -20,8 +20,8 @@ uv run python demos/demo1_server.py   # start first, listens on localhost:1234
 uv run python demos/demo1_client.py   # prompts for message, sends with timing encoding
 
 # Demo 2: Server embeds hidden quote in HTTP image response (Tornado)
-uv run python demos/demo2_server_tornado.py   # starts on localhost:8888, serves images
-uv run python demos/demo2_client_tornado.py   # fetches image, decodes hidden quote from chunk timing
+uv run python demos/temporal_cloak_web_demo.py   # starts on localhost:8888, serves images
+uv run python demos/temporal_cloak_cli_decoder.py   # fetches image, decodes hidden quote from chunk timing
 ```
 
 ## Project Structure
@@ -39,8 +39,8 @@ temporal_cloak/          # Main package
 demos/                   # Runnable demo scripts
 ├── demo1_client.py
 ├── demo1_server.py
-├── demo2_server_tornado.py
-└── demo2_client_tornado.py
+├── temporal_cloak_web_demo.py
+└── temporal_cloak_cli_decoder.py
 tests/                   # Per-module test files
 ├── test_decoding.py
 ├── test_encoding.py

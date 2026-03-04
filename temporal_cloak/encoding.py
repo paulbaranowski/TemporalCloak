@@ -1,5 +1,6 @@
+import math
+
 from bitstring import BitArray
-import random
 from temporal_cloak.const import TemporalCloakConst
 
 
@@ -34,6 +35,51 @@ class TemporalCloakEncoding:
         for byte in data:
             checksum ^= byte
         return checksum
+
+    @staticmethod
+    def bits_required(message_len: int) -> int:
+        """Return the total number of timing-delay slots needed to transmit a
+        message of *message_len* ASCII characters.
+
+        Layout: boundary (16) + payload (message_len*8) + checksum (8) + boundary (16)
+        """
+        boundary_bits = len(BitArray(TemporalCloakConst.BOUNDARY_BITS))
+        return boundary_bits * 2 + message_len * 8 + 8  # 8 = checksum
+
+    @staticmethod
+    def min_image_size(message_len: int,
+                       chunk_size: int = TemporalCloakConst.CHUNK_SIZE_TORNADO) -> int:
+        """Return the minimum image file size (bytes) required to carry a
+        message of *message_len* characters at the given chunk size.
+
+        Each chunk after the first provides one delay slot, so we need
+        (bits_required + 1) chunks total.
+        """
+        total_bits = TemporalCloakEncoding.bits_required(message_len)
+        chunks_needed = total_bits + 1  # +1 for the first chunk (no delay)
+        # ceil(size / chunk_size) >= chunks_needed when size >= (chunks_needed-1)*chunk_size + 1
+        return (chunks_needed - 1) * chunk_size + 1
+
+    @staticmethod
+    def validate_image_size(image_size: int, message_len: int,
+                            chunk_size: int = TemporalCloakConst.CHUNK_SIZE_TORNADO) -> bool:
+        """Return True if an image of *image_size* bytes can carry a message
+        of *message_len* characters."""
+        available_chunks = math.ceil(image_size / chunk_size)
+        available_slots = available_chunks - 1
+        return available_slots >= TemporalCloakEncoding.bits_required(message_len)
+
+    @staticmethod
+    def max_message_len(image_size: int,
+                        chunk_size: int = TemporalCloakConst.CHUNK_SIZE_TORNADO) -> int:
+        """Return the maximum message length (characters) an image can carry."""
+        available_chunks = math.ceil(image_size / chunk_size)
+        available_slots = available_chunks - 1
+        # available_slots >= boundary*2 + msg_len*8 + 8
+        # msg_len <= (available_slots - 40) / 8
+        boundary_bits = len(BitArray(TemporalCloakConst.BOUNDARY_BITS))
+        overhead = boundary_bits * 2 + 8  # two boundaries + checksum
+        return max(0, (available_slots - overhead) // 8)
 
     @staticmethod
     def encode_message(msg: str):
