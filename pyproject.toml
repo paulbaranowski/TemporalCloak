@@ -1,5 +1,5 @@
 [project]
-name = "temporalcloak"
+name = "temporal-cloak"
 version = "0.1.0"
 description = "Time-Based Steganography"
 requires-python = ">=3.13"

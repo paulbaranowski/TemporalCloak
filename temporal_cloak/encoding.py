@@ -1,6 +1,6 @@
 from bitstring import BitArray
 import random
-from TemporalCloakConst import TemporalCloakConst
+from temporal_cloak.const import TemporalCloakConst
 
 
 class TemporalCloakEncoding:
