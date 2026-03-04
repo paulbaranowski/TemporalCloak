@@ -1,3 +1,4 @@
+import sys
 import requests
 from temporal_cloak.decoding import TemporalCloakDecoding
 from temporal_cloak.const import TemporalCloakConst
@@ -5,7 +6,10 @@ import humanize
 
 
 def main():
-    url = 'http://localhost:8888'
+    if len(sys.argv) > 1:
+        url = sys.argv[1]
+    else:
+        url = 'http://localhost:8888/api/image'
 
     print("Getting {}...".format(url))
     response = requests.get(url, stream=True)
