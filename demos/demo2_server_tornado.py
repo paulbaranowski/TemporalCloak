@@ -1,10 +1,10 @@
 import tornado.ioloop
 import tornado.web
 import time
-from TemporalCloakEncoding import TemporalCloakEncoding
-from TemporalCloakConst import TemporalCloakConst
-from QuoteProvider import QuoteProvider
-from ImageProvider import ImageProvider
+from temporal_cloak.encoding import TemporalCloakEncoding
+from temporal_cloak.const import TemporalCloakConst
+from temporal_cloak.quote_provider import QuoteProvider
+from temporal_cloak.image_provider import ImageProvider
 import humanize
 
 quote_provider = QuoteProvider()

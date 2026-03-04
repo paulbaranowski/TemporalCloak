@@ -1,6 +1,6 @@
 import requests
-from TemporalCloakDecoding import TemporalCloakDecoding
-from TemporalCloakConst import TemporalCloakConst
+from temporal_cloak.decoding import TemporalCloakDecoding
+from temporal_cloak.const import TemporalCloakConst
 import humanize
 
 

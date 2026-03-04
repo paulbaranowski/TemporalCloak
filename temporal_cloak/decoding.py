@@ -1,5 +1,5 @@
 from bitstring import Bits, BitStream, BitArray
-from TemporalCloakConst import TemporalCloakConst
+from temporal_cloak.const import TemporalCloakConst
 import time
 import warnings
 
@@ -166,8 +166,10 @@ class TemporalCloakDecoding:
                 f"Possible bit corruption."
             )
 
-        self._last_message = self.decode(message, completed)
-        return self._last_message, completed, end_pos
+        decoded = self.decode(message, completed)
+        if completed:
+            self._last_message = decoded
+        return decoded, completed, end_pos
 
     def jump_to_next_message(self) -> None:
         # print("EOM: {}".format(self._eom))

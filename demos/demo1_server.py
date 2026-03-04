@@ -1,4 +1,4 @@
-from TemporalCloakServer import TemporalCloakServer
+from temporal_cloak.server import TemporalCloakServer
 
 
 def main():

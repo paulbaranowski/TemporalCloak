@@ -1,6 +1,6 @@
 import json
 import random
-from TemporalCloakEncoding import TemporalCloakEncoding
+from temporal_cloak.encoding import TemporalCloakEncoding
 
 
 class QuoteProvider:

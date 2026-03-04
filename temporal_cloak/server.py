@@ -1,5 +1,5 @@
 import socket
-from TemporalCloakDecoding import TemporalCloakDecoding
+from temporal_cloak.decoding import TemporalCloakDecoding
 
 
 class TemporalCloakServer:

@@ -1,7 +1,7 @@
 import socket
 import time
 import random
-from TemporalCloakEncoding import TemporalCloakEncoding
+from temporal_cloak.encoding import TemporalCloakEncoding
 
 
 class TemporalCloakClient:

@@ -1,4 +1,4 @@
-from TemporalCloakClient import TemporalCloakClient
+from temporal_cloak.client import TemporalCloakClient
 
 
 def main():
