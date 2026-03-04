@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TemporalCloak - View</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background: #0a0a0f;
+            color: #c0c0c0;
+            font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 40px 20px 80px;
+        }
+
+        header { text-align: center; margin-bottom: 32px; }
+
+        h1 {
+            font-size: 1.5rem;
+            color: #00ffd5;
+            text-shadow: 0 0 20px rgba(0, 255, 213, 0.3);
+            letter-spacing: 2px;
+        }
+
+        h1 a { color: inherit; text-decoration: none; }
+        h1 a:hover { text-decoration: underline; }
+
+        .image-display {
+            text-align: center;
+            margin-bottom: 24px;
+        }
+
+        .image-display img {
+            max-width: 100%;
+            max-height: 360px;
+            border-radius: 8px;
+            border: 1px solid #222233;
+        }
+
+        .image-placeholder {
+            width: 100%;
+            height: 200px;
+            border: 1px dashed #222233;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #333;
+            font-size: 0.8rem;
+        }
+
+        /* How it works */
+        .how-it-works {
+            margin-bottom: 28px;
+            border: 1px solid #222233;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .how-toggle {
+            width: 100%;
+            padding: 12px 16px;
+            background: #111118;
+            color: #888;
+            border: none;
+            font-family: inherit;
+            font-size: 0.8rem;
+            cursor: pointer;
+            text-align: left;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .how-toggle:hover { color: #aaa; }
+        .how-toggle .arrow { transition: transform 0.2s; }
+        .how-toggle.open .arrow { transform: rotate(90deg); }
+
+        .how-content {
+            display: none;
+            padding: 16px;
+            background: #0d0d14;
+            font-size: 0.8rem;
+            color: #777;
+            line-height: 1.8;
+        }
+
+        .how-content.open { display: block; }
+
+        .delay-diagram {
+            display: flex;
+            align-items: flex-end;
+            gap: 4px;
+            margin: 12px 0;
+            padding: 12px;
+            background: #0a0a0f;
+            border-radius: 4px;
+            height: 70px;
+        }
+
+        .delay-bar {
+            width: 18px;
+            border-radius: 2px 2px 0 0;
+            text-align: center;
+            font-size: 0.65rem;
+            color: #0a0a0f;
+            font-weight: bold;
+            display: flex;
+            align-items: flex-end;
+            justify-content: center;
+            padding-bottom: 2px;
+        }
+
+        .delay-label {
+            font-size: 0.7rem;
+            margin-left: 12px;
+            color: #666;
+            align-self: center;
+        }
+
+        .code { color: #00ffd5; }
+
+        /* Decode button */
+        .btn {
+            display: block;
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #00ffd5 0%, #00cc99 100%);
+            color: #0a0a0f;
+            border: none;
+            border-radius: 6px;
+            font-family: inherit;
+            font-size: 0.95rem;
+            font-weight: 700;
+            letter-spacing: 1px;
+            cursor: pointer;
+            transition: opacity 0.2s, transform 0.1s;
+        }
+
+        .btn:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 16px rgba(0, 255, 213, 0.3);
+        }
+
+        .btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+        /* Visualization */
+        .viz { margin-top: 32px; }
+
+        .viz-section {
+            margin-bottom: 20px;
+        }
+
+        .viz-label {
+            font-size: 0.7rem;
+            color: #555;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 6px;
+        }
+
+        /* Stats bar */
+        .stats-bar {
+            display: flex;
+            gap: 24px;
+            flex-wrap: wrap;
+            padding: 10px 16px;
+            background: #111118;
+            border: 1px solid #222233;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            margin-bottom: 20px;
+        }
+
+        .stat-item { color: #666; }
+        .stat-value { color: #00ffd5; }
+
+        /* Timing bars */
+        .timing-bars-container {
+            background: #111118;
+            border: 1px solid #222233;
+            border-radius: 6px;
+            padding: 12px;
+            overflow-x: auto;
+            white-space: nowrap;
+            height: 90px;
+            display: flex;
+            align-items: flex-end;
+            gap: 1px;
+        }
+
+        .t-bar {
+            display: inline-block;
+            width: 3px;
+            min-height: 2px;
+            border-radius: 1px 1px 0 0;
+            flex-shrink: 0;
+            transition: height 0.1s;
+        }
+
+        .t-bar.bit1 { background: #00ff88; }
+        .t-bar.bit0 { background: #ff8800; }
+        .t-bar.boundary { opacity: 0.3; }
+
+        /* Bit stream */
+        .bit-stream {
+            background: #111118;
+            border: 1px solid #222233;
+            border-radius: 6px;
+            padding: 12px;
+            font-size: 0.8rem;
+            line-height: 1.8;
+            word-break: break-all;
+            max-height: 160px;
+            overflow-y: auto;
+        }
+
+        .bit-char { font-weight: bold; }
+        .bit-char.b1 { color: #00ff88; }
+        .bit-char.b0 { color: #ff8800; }
+        .bit-char.low-conf { color: #ffcc00; }
+        .bit-char.boundary { opacity: 0.3; }
+        .bit-space { display: inline-block; width: 6px; }
+
+        /* Message reveal */
+        .message-reveal {
+            background: #111118;
+            border: 1px solid #222233;
+            border-radius: 6px;
+            padding: 20px;
+            min-height: 60px;
+            font-size: 1.3rem;
+            color: #00ff88;
+            text-shadow: 0 0 8px rgba(0, 255, 136, 0.2);
+            display: flex;
+            align-items: center;
+        }
+
+        .message-text { white-space: pre-wrap; }
+
+        .cursor {
+            display: inline-block;
+            width: 2px;
+            height: 1.3em;
+            background: #00ffd5;
+            margin-left: 2px;
+            animation: blink 0.8s step-end infinite;
+            vertical-align: text-bottom;
+        }
+
+        @keyframes blink {
+            50% { opacity: 0; }
+        }
+
+        @keyframes charAppear {
+            0% { color: #00ffd5; text-shadow: 0 0 12px #00ffd5; }
+            100% { color: #00ff88; text-shadow: 0 0 8px rgba(0, 255, 136, 0.2); }
+        }
+
+        .char-new { animation: charAppear 0.4s ease-out; }
+
+        /* Checksum */
+        .checksum {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            font-weight: bold;
+        }
+
+        .checksum.valid { background: rgba(0, 255, 136, 0.1); color: #00ff88; }
+        .checksum.invalid { background: rgba(255, 51, 102, 0.1); color: #ff3366; }
+
+        /* Error / loading */
+        .error-page {
+            text-align: center;
+            padding: 80px 20px;
+            color: #ff3366;
+        }
+
+        .loading-text {
+            text-align: center;
+            color: #444;
+            padding: 40px;
+            font-size: 0.85rem;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .fade-in { animation: fadeIn 0.3s ease-out; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1><a href="/">TemporalCloak</a></h1>
+        </header>
+
+        <div id="loading" class="loading-text">Loading...</div>
+        <div id="errorPage" class="error-page" style="display:none"></div>
+
+        <main id="mainContent" style="display:none">
+            <div class="image-display" id="imageDisplay">
+                <img id="linkImage" alt="Encoded image" style="display:none">
+                <div id="imagePlaceholder" class="image-placeholder">Image will load during decode</div>
+            </div>
+
+            <div id="messageSection" class="viz-section" style="display:none">
+                <div class="viz-label">Decoded Message</div>
+                <div class="message-reveal">
+                    <span class="message-text" id="messageText"></span>
+                    <span class="cursor" id="msgCursor"></span>
+                </div>
+                <div id="checksumSection" style="display:none; margin-top:8px;"></div>
+            </div>
+
+            <button id="decodeBtn" class="btn">Decode Hidden Message</button>
+
+            <div id="viz" class="viz" style="display:none">
+                <div class="stats-bar" id="statsBar">
+                    <div class="stat-item">Bits: <span class="stat-value" id="statBits">0</span></div>
+                    <div class="stat-item">Elapsed: <span class="stat-value" id="statElapsed">0.0s</span></div>
+                    <div class="stat-item">Threshold: <span class="stat-value" id="statThreshold">-</span></div>
+                    <div class="stat-item">Avg Conf: <span class="stat-value" id="statConf">-</span></div>
+                    <div class="stat-item">Bits/sec: <span class="stat-value" id="statBps">-</span></div>
+                </div>
+
+                <div class="viz-section">
+                    <div class="viz-label">Timing</div>
+                    <div class="timing-bars-container" id="timingBars"></div>
+                </div>
+
+                <div class="viz-section">
+                    <div class="viz-label">Bit Stream</div>
+                    <div class="bit-stream" id="bitStream"></div>
+                </div>
+            </div>
+
+            <div class="how-it-works">
+                <button class="how-toggle" id="howToggle">
+                    How does TemporalCloak work?
+                    <span class="arrow">&#9654;</span>
+                </button>
+                <div class="how-content" id="howContent">
+                    <p>TemporalCloak hides messages in the <strong style="color:#00ffd5">timing delays</strong> between data chunks &mdash; not in the data itself. The image you see is completely normal. The secret is in <em>when</em> each piece arrives.</p>
+                    <div class="delay-diagram">
+                        <div class="delay-bar bit1" style="height:14px;background:#00ff88;">1</div>
+                        <div class="delay-bar bit1" style="height:14px;background:#00ff88;">1</div>
+                        <div class="delay-bar bit0" style="height:46px;background:#ff8800;">0</div>
+                        <div class="delay-bar bit1" style="height:14px;background:#00ff88;">1</div>
+                        <div class="delay-bar bit0" style="height:46px;background:#ff8800;">0</div>
+                        <div class="delay-bar bit0" style="height:46px;background:#ff8800;">0</div>
+                        <div class="delay-bar bit1" style="height:14px;background:#00ff88;">1</div>
+                        <div class="delay-bar bit1" style="height:14px;background:#00ff88;">1</div>
+                        <div class="delay-label">&larr; short delay = <span class="code">1</span>, long delay = <span class="code">0</span></div>
+                    </div>
+                    <p>Each bit is encoded as a time gap: a <strong style="color:#00ff88">short delay</strong> means binary 1, a <strong style="color:#ff8800">longer delay</strong> means binary 0. A boundary marker (<span class="code">0xFF00</span>) frames the message. An 8-bit XOR checksum verifies integrity.</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // ── Globals ──
+        const linkId = new URLSearchParams(window.location.search).get('id');
+        const BOUNDARY_LEN = 16;
+        let confidenceSum = 0;
+        let bitCount = 0;
+        let lastMessage = '';
+        let maxDelayObserved = 0.01;
+
+        // ── Elements ──
+        const loadingEl      = document.getElementById('loading');
+        const errorPageEl    = document.getElementById('errorPage');
+        const mainContent    = document.getElementById('mainContent');
+        const linkImage      = document.getElementById('linkImage');
+        const imagePlaceholder = document.getElementById('imagePlaceholder');
+        const howToggle      = document.getElementById('howToggle');
+        const howContent    = document.getElementById('howContent');
+        const decodeBtn     = document.getElementById('decodeBtn');
+        const vizEl         = document.getElementById('viz');
+        const timingBars    = document.getElementById('timingBars');
+        const bitStream     = document.getElementById('bitStream');
+        const messageText   = document.getElementById('messageText');
+        const msgCursor     = document.getElementById('msgCursor');
+        const checksumEl    = document.getElementById('checksumSection');
+        const statBits      = document.getElementById('statBits');
+        const statElapsed   = document.getElementById('statElapsed');
+        const statThreshold = document.getElementById('statThreshold');
+        const statConf      = document.getElementById('statConf');
+        const statBps       = document.getElementById('statBps');
+
+        // ── How it works toggle ──
+        howToggle.addEventListener('click', () => {
+            howToggle.classList.toggle('open');
+            howContent.classList.toggle('open');
+        });
+
+        // ── Initialization ──
+        async function init() {
+            if (!linkId) {
+                showError('No link ID provided');
+                return;
+            }
+            try {
+                const resp = await fetch(`/api/link/${linkId}`);
+                if (!resp.ok) {
+                    showError('Link not found or expired');
+                    return;
+                }
+                loadingEl.style.display = 'none';
+                mainContent.style.display = 'block';
+            } catch (e) {
+                showError('Failed to load link');
+            }
+        }
+
+        function showError(msg) {
+            loadingEl.style.display = 'none';
+            errorPageEl.textContent = msg;
+            errorPageEl.style.display = 'block';
+        }
+
+        // ── Decode ──
+        const messageSection = document.getElementById('messageSection');
+
+        decodeBtn.addEventListener('click', () => {
+            decodeBtn.disabled = true;
+            decodeBtn.textContent = 'Decoding...';
+            messageSection.style.display = '';
+            vizEl.style.display = 'block';
+            vizEl.classList.add('fade-in');
+            startDecode();
+        });
+
+        function startDecode() {
+            // Load the encoded image in parallel — the browser renders it
+            // progressively as timing-delayed chunks arrive.
+            imagePlaceholder.style.display = 'none';
+            linkImage.style.display = '';
+            linkImage.src = `/api/image/${linkId}`;
+
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const ws = new WebSocket(`${protocol}//${window.location.host}/api/decode/${linkId}`);
+
+            ws.onopen = () => {
+                ws.send(JSON.stringify({ action: 'start' }));
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                switch (data.type) {
+                    case 'sync':
+                        // Timer started, first chunk received
+                        break;
+                    case 'bit':
+                        handleBit(data);
+                        break;
+                    case 'complete':
+                        handleComplete(data);
+                        ws.close();
+                        break;
+                    case 'error':
+                        showError(data.message);
+                        ws.close();
+                        break;
+                }
+            };
+
+            ws.onerror = () => {
+                showError('WebSocket connection failed');
+            };
+
+            ws.onclose = () => {
+                msgCursor.style.display = 'none';
+            };
+        }
+
+        // ── Handle each bit event ──
+        function handleBit(data) {
+            bitCount++;
+            confidenceSum += data.confidence;
+
+            // Track max delay for bar scaling
+            if (data.delay > maxDelayObserved) {
+                maxDelayObserved = data.delay;
+            }
+
+            // ── Timing bar ──
+            const bar = document.createElement('div');
+            const barMaxHeight = 60;
+            const barMinHeight = 2;
+            const scaledHeight = Math.min(data.delay / maxDelayObserved, 1) * (barMaxHeight - barMinHeight) + barMinHeight;
+            bar.className = `t-bar bit${data.bit}`;
+            bar.style.height = scaledHeight + 'px';
+            if (data.phase === 'boundary_start') bar.classList.add('boundary');
+            timingBars.appendChild(bar);
+            timingBars.scrollLeft = timingBars.scrollWidth;
+
+            // ── Bit stream ──
+            const bitChar = document.createElement('span');
+            bitChar.className = `bit-char b${data.bit}`;
+            if (data.confidence < 0.2) bitChar.classList.add('low-conf');
+            if (data.phase === 'boundary_start') bitChar.classList.add('boundary');
+            bitChar.textContent = data.bit;
+            bitStream.appendChild(bitChar);
+
+            // Insert space every 8 bits
+            if (bitCount % 8 === 0) {
+                const space = document.createElement('span');
+                space.className = 'bit-space';
+                bitStream.appendChild(space);
+            }
+
+            bitStream.scrollTop = bitStream.scrollHeight;
+
+            // ── Message reveal ──
+            if (data.message_so_far && data.message_so_far !== lastMessage) {
+                const newChars = data.message_so_far.slice(lastMessage.length);
+                for (const ch of newChars) {
+                    const span = document.createElement('span');
+                    span.className = 'char-new';
+                    span.textContent = ch;
+                    messageText.appendChild(span);
+                }
+                lastMessage = data.message_so_far;
+            }
+
+            // ── Stats ──
+            statBits.textContent = bitCount;
+            statElapsed.textContent = data.elapsed + 's';
+            statThreshold.textContent = (data.threshold * 1000).toFixed(1) + 'ms';
+            statConf.textContent = (confidenceSum / bitCount * 100).toFixed(0) + '%';
+            if (data.elapsed > 0) {
+                statBps.textContent = (bitCount / data.elapsed).toFixed(1);
+            }
+        }
+
+        // ── Handle completion ──
+        function handleComplete(data) {
+            decodeBtn.textContent = 'Decode Complete';
+            msgCursor.style.display = 'none';
+
+            // Ensure final message is shown
+            if (data.message && data.message !== lastMessage) {
+                messageText.textContent = '';
+                for (const ch of data.message) {
+                    const span = document.createElement('span');
+                    span.textContent = ch;
+                    messageText.appendChild(span);
+                }
+            }
+
+            // Mark last BOUNDARY_LEN bits as boundary_end
+            const bars = timingBars.querySelectorAll('.t-bar');
+            const bits = bitStream.querySelectorAll('.bit-char');
+            for (let i = Math.max(0, bars.length - BOUNDARY_LEN); i < bars.length; i++) {
+                bars[i].classList.add('boundary');
+                if (bits[i]) bits[i].classList.add('boundary');
+            }
+
+            // Update final stats
+            statBits.textContent = data.total_bits;
+            statElapsed.textContent = data.elapsed + 's';
+            if (data.threshold) {
+                statThreshold.textContent = (data.threshold * 1000).toFixed(1) + 'ms';
+            }
+            if (data.elapsed > 0) {
+                statBps.textContent = (data.total_bits / data.elapsed).toFixed(1);
+            }
+
+            // Checksum indicator
+            checksumEl.style.display = 'block';
+            if (data.checksum_valid) {
+                checksumEl.innerHTML = '<span class="checksum valid">&#10003; Checksum valid</span>';
+            } else if (data.partial) {
+                checksumEl.innerHTML = '<span class="checksum invalid">&#10007; Incomplete &mdash; image too small for this message</span>';
+            } else {
+                checksumEl.innerHTML = '<span class="checksum invalid">&#10007; Checksum mismatch &mdash; message may be corrupted</span>';
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>

@@ -5,20 +5,381 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TemporalCloak</title>
     <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
         body {
-            font-family: system-ui, sans-serif;
-            max-width: 600px;
-            margin: 80px auto;
-            padding: 0 20px;
-            color: #222;
+            background: #0a0a0f;
+            color: #c0c0c0;
+            font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+            min-height: 100vh;
+            line-height: 1.6;
         }
-        h1 { font-size: 1.5em; }
-        p { line-height: 1.6; color: #555; }
+
+        .container {
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 40px 20px 80px;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 48px;
+        }
+
+        h1 {
+            font-size: 2rem;
+            color: #00ffd5;
+            text-shadow: 0 0 20px rgba(0, 255, 213, 0.3);
+            letter-spacing: 2px;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            color: #666;
+            font-size: 0.85rem;
+        }
+
+        .input-group {
+            margin-bottom: 28px;
+        }
+
+        label {
+            display: block;
+            color: #00ff88;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+        }
+
+        input[type="text"] {
+            width: 100%;
+            padding: 12px 16px;
+            background: #111118;
+            border: 1px solid #222233;
+            border-radius: 6px;
+            color: #e0e0e0;
+            font-family: inherit;
+            font-size: 0.95rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        input[type="text"]:focus {
+            border-color: #00ffd5;
+            box-shadow: 0 0 8px rgba(0, 255, 213, 0.15);
+        }
+
+        input[type="text"]::placeholder {
+            color: #444;
+        }
+
+        .char-count {
+            text-align: right;
+            font-size: 0.75rem;
+            color: #555;
+            margin-top: 4px;
+        }
+
+        .char-count.warn { color: #ff8800; }
+        .char-count.limit { color: #ff3366; }
+
+        .image-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 10px;
+        }
+
+        .image-thumb {
+            position: relative;
+            aspect-ratio: 1;
+            border-radius: 6px;
+            overflow: hidden;
+            border: 2px solid transparent;
+            cursor: pointer;
+            transition: border-color 0.2s, transform 0.15s;
+        }
+
+        .image-thumb:hover {
+            border-color: #333;
+            transform: scale(1.03);
+        }
+
+        .image-thumb.selected {
+            border-color: #00ffd5;
+            box-shadow: 0 0 12px rgba(0, 255, 213, 0.3);
+        }
+
+        .image-thumb img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        .btn {
+            display: block;
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #00ffd5 0%, #00cc99 100%);
+            color: #0a0a0f;
+            border: none;
+            border-radius: 6px;
+            font-family: inherit;
+            font-size: 0.95rem;
+            font-weight: 700;
+            letter-spacing: 1px;
+            cursor: pointer;
+            transition: opacity 0.2s, transform 0.1s;
+            margin-top: 8px;
+        }
+
+        .btn:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 16px rgba(0, 255, 213, 0.3);
+        }
+
+        .btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+
+        .result {
+            margin-top: 40px;
+            padding: 24px;
+            background: #111118;
+            border: 1px solid #222233;
+            border-radius: 8px;
+        }
+
+        .result h3 {
+            color: #00ff88;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 16px;
+        }
+
+        .link-box {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: #0a0a0f;
+            border: 1px solid #222233;
+            border-radius: 6px;
+            padding: 12px 16px;
+        }
+
+        .link-box a {
+            flex: 1;
+            color: #00ffd5;
+            text-decoration: none;
+            word-break: break-all;
+            font-size: 0.9rem;
+        }
+
+        .link-box a:hover {
+            text-decoration: underline;
+        }
+
+        .btn-small {
+            padding: 6px 14px;
+            background: #222233;
+            color: #00ffd5;
+            border: 1px solid #333;
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 0.75rem;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background 0.2s;
+        }
+
+        .btn-small:hover { background: #2a2a3a; }
+
+        .hint {
+            color: #555;
+            font-size: 0.8rem;
+            margin-top: 12px;
+        }
+
+        .error-msg {
+            color: #ff3366;
+            font-size: 0.8rem;
+            margin-top: 8px;
+        }
+
+        .loading {
+            text-align: center;
+            color: #444;
+            padding: 40px;
+            font-size: 0.85rem;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .fade-in { animation: fadeIn 0.3s ease-out; }
     </style>
 </head>
 <body>
-    <h1>TemporalCloak</h1>
-    <p>Time-based steganography. Hidden messages encoded in the timing between data transmissions.</p>
-    <p>Full landing page coming soon.</p>
+    <div class="container">
+        <header>
+            <h1>TemporalCloak</h1>
+            <p class="subtitle">Hide messages in the timing between data transmissions</p>
+        </header>
+
+        <section class="create-form">
+            <div class="input-group">
+                <label for="message">Secret Message</label>
+                <input type="text" id="message" maxlength="200"
+                       placeholder="Type your secret message (ASCII only)" autocomplete="off">
+                <div class="char-count"><span id="charCount">0</span>/200</div>
+            </div>
+
+            <div class="input-group">
+                <label>Choose an Image</label>
+                <div id="imageGrid" class="image-grid">
+                    <div class="loading">Loading images...</div>
+                </div>
+            </div>
+
+            <button id="createBtn" class="btn" disabled>Create Secret Link</button>
+            <div id="errorMsg" class="error-msg" style="display:none"></div>
+        </section>
+
+        <section id="result" class="result" style="display:none">
+            <h3>Your Secret Link</h3>
+            <div class="link-box">
+                <a id="resultLink" href="" target="_blank"></a>
+                <button id="copyBtn" class="btn-small">Copy</button>
+            </div>
+            <p class="hint">Share this link. The recipient can decode the hidden message from the image's timing.</p>
+        </section>
+    </div>
+
+    <script>
+        const messageInput = document.getElementById('message');
+        const charCount = document.getElementById('charCount');
+        const imageGrid = document.getElementById('imageGrid');
+        const createBtn = document.getElementById('createBtn');
+        const errorMsg = document.getElementById('errorMsg');
+        const resultSection = document.getElementById('result');
+        const resultLink = document.getElementById('resultLink');
+        const copyBtn = document.getElementById('copyBtn');
+
+        let selectedImage = null;
+
+        // ASCII validation
+        function isAscii(str) {
+            for (let i = 0; i < str.length; i++) {
+                if (str.charCodeAt(i) > 127) return false;
+            }
+            return true;
+        }
+
+        function updateCreateBtn() {
+            const msg = messageInput.value.trim();
+            createBtn.disabled = !(msg.length > 0 && isAscii(msg) && selectedImage);
+        }
+
+        // Character counter
+        messageInput.addEventListener('input', () => {
+            const len = messageInput.value.length;
+            charCount.textContent = len;
+            const counter = charCount.parentElement;
+            counter.className = 'char-count' + (len > 180 ? (len >= 200 ? ' limit' : ' warn') : '');
+
+            if (!isAscii(messageInput.value)) {
+                showError('Message must contain only ASCII characters');
+            } else {
+                hideError();
+            }
+            updateCreateBtn();
+        });
+
+        // Load images
+        async function loadImages() {
+            try {
+                const resp = await fetch('/api/images');
+                const images = await resp.json();
+                imageGrid.innerHTML = '';
+
+                images.forEach(img => {
+                    const thumb = document.createElement('div');
+                    thumb.className = 'image-thumb';
+                    thumb.innerHTML = `<img src="${img.url}" alt="${img.filename}" loading="lazy">`;
+                    thumb.addEventListener('click', () => {
+                        document.querySelectorAll('.image-thumb').forEach(t => t.classList.remove('selected'));
+                        thumb.classList.add('selected');
+                        selectedImage = img.filename;
+                        updateCreateBtn();
+                    });
+                    imageGrid.appendChild(thumb);
+                });
+            } catch (e) {
+                imageGrid.innerHTML = '<div class="loading" style="color:#ff3366">Failed to load images</div>';
+            }
+        }
+
+        function showError(msg) {
+            errorMsg.textContent = msg;
+            errorMsg.style.display = 'block';
+        }
+
+        function hideError() {
+            errorMsg.style.display = 'none';
+        }
+
+        // Create link
+        createBtn.addEventListener('click', async () => {
+            hideError();
+            createBtn.disabled = true;
+            createBtn.textContent = 'Creating...';
+
+            try {
+                const resp = await fetch('/api/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: messageInput.value.trim(),
+                        image: selectedImage,
+                    }),
+                });
+                const data = await resp.json();
+
+                if (!resp.ok) {
+                    showError(data.error || 'Failed to create link');
+                    createBtn.textContent = 'Create Secret Link';
+                    updateCreateBtn();
+                    return;
+                }
+
+                const fullUrl = `${window.location.origin}${data.url}`;
+                resultLink.href = fullUrl;
+                resultLink.textContent = fullUrl;
+                resultSection.style.display = 'block';
+                resultSection.classList.add('fade-in');
+                resultSection.scrollIntoView({ behavior: 'smooth' });
+            } catch (e) {
+                showError('Network error');
+            }
+
+            createBtn.textContent = 'Create Secret Link';
+            updateCreateBtn();
+        });
+
+        // Copy to clipboard
+        copyBtn.addEventListener('click', () => {
+            navigator.clipboard.writeText(resultLink.href).then(() => {
+                copyBtn.textContent = 'Copied!';
+                setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+            });
+        });
+
+        loadImages();
+    </script>
 </body>
 </html>
