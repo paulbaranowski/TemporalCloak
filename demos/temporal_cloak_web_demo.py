@@ -98,11 +98,13 @@ class ImageListHandler(tornado.web.RequestHandler):
         for fname in sorted(os.listdir(config.IMAGES_DIR)):
             if fname.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".webp")):
                 fpath = os.path.join(config.IMAGES_DIR, fname)
+                file_size = os.path.getsize(fpath)
                 images.append(
                     {
                         "filename": fname,
                         "url": f"/hosted/{fname}",
-                        "size": os.path.getsize(fpath),
+                        "size": file_size,
+                        "max_message_len": TemporalCloakEncoding.max_message_len(file_size),
                     }
                 )
         self.set_header("Content-Type", "application/json")
@@ -147,6 +149,19 @@ class CreateLinkHandler(tornado.web.RequestHandler):
         ):
             self.set_status(400)
             self.write({"error": "Image not found"})
+            return
+
+        # Validate image is large enough to carry the message
+        image_size = os.path.getsize(real_image)
+        if not TemporalCloakEncoding.validate_image_size(image_size, len(message)):
+            max_chars = TemporalCloakEncoding.max_message_len(image_size)
+            self.set_status(400)
+            self.write({
+                "error": f"Message too long for this image. "
+                         f"This image can carry up to {max_chars} characters, "
+                         f"but your message is {len(message)} characters. "
+                         f"Try a shorter message or a larger image."
+            })
             return
 
         link_id = secrets.token_hex(4)

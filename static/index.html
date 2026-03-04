@@ -234,9 +234,9 @@
         <section class="create-form">
             <div class="input-group">
                 <label for="message">Secret Message</label>
-                <input type="text" id="message" maxlength="200"
+                <input type="text" id="message"
                        placeholder="Type your secret message (ASCII only)" autocomplete="off">
-                <div class="char-count"><span id="charCount">0</span>/200</div>
+                <div class="char-count"><span id="charCount">0</span>/<span id="maxCount">200</span></div>
             </div>
 
             <div class="input-group">
@@ -271,6 +271,7 @@
         const copyBtn = document.getElementById('copyBtn');
 
         let selectedImage = null;
+        let maxMessageLen = 200;
 
         // ASCII validation
         function isAscii(str) {
@@ -280,20 +281,35 @@
             return true;
         }
 
+        function updateMaxLen(newMax) {
+            maxMessageLen = newMax;
+            messageInput.maxLength = maxMessageLen;
+            document.getElementById('maxCount').textContent = maxMessageLen;
+            updateCharCount();
+            updateCreateBtn();
+        }
+
+        function updateCharCount() {
+            const len = messageInput.value.length;
+            charCount.textContent = len;
+            const counter = charCount.parentElement;
+            const warnAt = Math.floor(maxMessageLen * 0.9);
+            counter.className = 'char-count' + (len > warnAt ? (len >= maxMessageLen ? ' limit' : ' warn') : '');
+        }
+
         function updateCreateBtn() {
             const msg = messageInput.value.trim();
-            createBtn.disabled = !(msg.length > 0 && isAscii(msg) && selectedImage);
+            createBtn.disabled = !(msg.length > 0 && msg.length <= maxMessageLen && isAscii(msg) && selectedImage);
         }
 
         // Character counter
         messageInput.addEventListener('input', () => {
-            const len = messageInput.value.length;
-            charCount.textContent = len;
-            const counter = charCount.parentElement;
-            counter.className = 'char-count' + (len > 180 ? (len >= 200 ? ' limit' : ' warn') : '');
+            updateCharCount();
 
             if (!isAscii(messageInput.value)) {
                 showError('Message must contain only ASCII characters');
+            } else if (messageInput.value.length > maxMessageLen) {
+                showError(`Message too long for this image (max ${maxMessageLen} characters)`);
             } else {
                 hideError();
             }
@@ -315,7 +331,7 @@
                         document.querySelectorAll('.image-thumb').forEach(t => t.classList.remove('selected'));
                         thumb.classList.add('selected');
                         selectedImage = img.filename;
-                        updateCreateBtn();
+                        updateMaxLen(img.max_message_len);
                     });
                     imageGrid.appendChild(thumb);
                 });
