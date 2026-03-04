@@ -18,11 +18,11 @@ time differences between bytes.
 
 Start the server with:
 ```
-uv run demo1_server.py
+uv run python demos/demo1_server.py
 ```
 Then run the client:
 ```
-uv run demo1_client.py
+uv run python demos/demo1_client.py
 ```
 
 
@@ -38,22 +38,20 @@ The web server is based on Tornado.
 
 Start up the server:
 ```
-uv run temporal_cloak_web_demo.py
+uv run python demos/temporal_cloak_web_demo.py
 ```
 Now you can go to http://localhost:8888 and see an image.
 
 Now run the client:
 ```
-uv run temporal_cloak_cli_decoder.py
+uv run python demos/temporal_cloak_cli_decoder.py
 ```
 
 ## Testing
 ```
-uv run test.py
+uv run python -m unittest discover -s tests -v
 ```
 
 ## Acknowledgements
-Quotes are from:
-https://github.com/JamesFT/Database-Quotes-JSON
-Images are from:
-https://www.pexels.com/
+- Quotes: [Database-Quotes-JSON](https://github.com/JamesFT/Database-Quotes-JSON)
+- Images: [Pixabay](https://pixabay.com/) and [Pexels](https://www.pexels.com/)
