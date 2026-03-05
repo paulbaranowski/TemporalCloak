@@ -128,6 +128,13 @@ sudo apt install python3.13 python3.13-venv python3.13-dev -y
 # Install uv (project uses uv, not pip)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
+# Install sqlite3 CLI (needed for querying the links database)
+sudo apt install sqlite3 -y
+
+# Install DuckDB CLI
+# DuckDB can also query SQLite files directly: duckdb -c "SELECT * FROM sqlite_scan('path/to/db', 'table')"
+curl -fsSL https://install.duckdb.org | sh
+
 # Install certbot for TLS
 sudo apt install certbot -y
 

@@ -9,69 +9,77 @@ TemporalCloak is a time-based steganography tool. It hides secret messages in th
 ## Commands
 
 ```bash
-# Setup (uses uv)
+# Setup (uses uv, not pip)
 uv sync
 
-# Tests (unittest, no pytest)
+# Run all tests (unittest, no pytest)
 uv run python -m unittest discover -s tests -v
+
+# Run a single test file
+uv run python -m unittest tests.test_encoding -v
+
+# Run a single test method
+uv run python -m unittest tests.test_encoding.TestEncoding.test_encode_message -v
 
 # Demo 1: Client sends hidden message to server via raw TCP sockets
 uv run python demos/demo1_server.py   # start first, listens on localhost:1234
 uv run python demos/demo1_client.py   # prompts for message, sends with timing encoding
 
-# Demo 2: Server embeds hidden quote in HTTP image response (Tornado)
-uv run python demos/temporal_cloak_web_demo.py   # starts on localhost:8888, serves images
-uv run python demos/temporal_cloak_cli_decoder.py   # fetches image, decodes hidden quote from chunk timing
-```
-
-## Project Structure
-
-```
-temporal_cloak/          # Main package
-├── __init__.py          # Re-exports all public classes
-├── const.py             # Protocol constants (delays, boundary marker, chunk size)
-├── encoding.py          # Message → bit array → delay sequence
-├── decoding.py          # Timing → bits → message reconstruction
-├── client.py            # TCP socket client for sending encoded messages
-├── server.py            # TCP socket server for receiving/decoding messages
-├── quote_provider.py    # Random ASCII-safe quote selection
-└── image_provider.py    # Random image file selection
-demos/                   # Runnable demo scripts
-├── demo1_client.py
-├── demo1_server.py
-├── temporal_cloak_web_demo.py
-└── temporal_cloak_cli_decoder.py
-tests/                   # Per-module test files
-├── test_decoding.py
-├── test_encoding.py
-├── test_quote_provider.py
-├── test_image_provider.py
-├── test_client.py
-├── test_server.py
-└── test_integration.py
-content/                 # Static assets
-├── images/
-└── quotes/quotes.json
+# Demo 2: Server embeds hidden message in HTTP image response (Tornado)
+uv run python demos/temporal_cloak_web_demo.py   # starts on localhost:8888
+uv run python demos/temporal_cloak_cli_decoder.py # decodes hidden quote from chunk timing
 ```
 
 ## Architecture
 
-The `temporal_cloak` package contains the core modules:
+### Core Package (`temporal_cloak/`)
 
-- **TemporalCloakConst** (`const.py`) — Protocol constants: bit delays, midpoint threshold, boundary marker, chunk size
-- **TemporalCloakEncoding** (`encoding.py`) — Converts a string message → bit array → delay sequence. Prepends boundary bits. Used by senders (demo1 client, demo2 server)
-- **TemporalCloakDecoding** (`decoding.py`) — Reconstructs messages from timing: accumulates bits via `mark_time()`, finds boundary markers, decodes bit stream back to text. Used by receivers (demo1 server, demo2 client)
-- **TemporalCloakClient** (`client.py`) — TCP socket client that sends bytes with timing-encoded delays
-- **TemporalCloakServer** (`server.py`) — TCP socket server that receives bytes and decodes timing
-- **QuoteProvider** (`quote_provider.py`) — Loads quotes from JSON, provides ASCII-safe random quotes
-- **ImageProvider** (`image_provider.py`) — Provides random image files from the content directory
+- **TemporalCloakEncoding** (`encoding.py`) — Converts string → bit array → delay sequence. Prepends boundary bits. Used by senders.
+- **TemporalCloakDecoding** (`decoding.py`) — Reconstructs messages from timing: accumulates bits via `mark_time()`, finds boundary markers, decodes bit stream back to text. Used by receivers.
+- **TemporalCloakConst** (`const.py`) — Protocol constants (bit delays, midpoint threshold, boundary marker, chunk size). Timing values are configurable via `TC_BIT_1_DELAY`, `TC_BIT_0_DELAY`, `TC_MIDPOINT` env vars.
+- **TemporalCloakClient/Server** (`client.py`, `server.py`) — TCP socket client/server for Demo 1.
+- **QuoteProvider** (`quote_provider.py`) — Loads quotes from JSON, provides ASCII-safe random quotes.
+- **ImageProvider** (`image_provider.py`) — Provides random image files from `content/images/`.
+- **LinkStore** (`link_store.py`) — SQLite-backed storage for shareable links. DB location controlled by `TC_DB_PATH` env var (default: `data/links.db`). Schema has one `links` table with columns: `link_id`, `message`, `image_path`, `image_filename`, `created_at`, `burn_after_reading`, `delivered`.
 
-The encoding/decoding roles are swapped between demos: in Demo 1 the client encodes and server decodes; in Demo 2 the server encodes (hiding a quote in image chunk timing) and the client decodes.
+### Configuration (`config.py` — top-level)
+
+Centralizes all deployment settings via env vars. Key vars: `TC_HOST`, `TC_PORT`, `TC_TLS_CERT`, `TC_TLS_KEY`, `TC_DB_PATH`. Imported by the web demo as `import config`.
+
+### Web Demo (`demos/temporal_cloak_web_demo.py`)
+
+Tornado-based HTTP server with these routes:
+
+| Route | Handler | Purpose |
+|-------|---------|---------|
+| `GET /api/image` | `ImageHandler` | Random image with random quote encoded in timing |
+| `GET /api/health` | `HealthHandler` | Health check (returns uptime) |
+| `GET /api/images` | `ImageListHandler` | JSON list of available images |
+| `POST /api/create` | `CreateLinkHandler` | Create shareable link (stores message + image in SQLite) |
+| `GET /api/link/<id>` | `LinkInfoHandler` | Link metadata (without revealing message) |
+| `GET /api/image/<id>` | `EncodedImageHandler` | Image with user's message encoded in timing |
+| `GET /api/image/<id>/normal` | `NormalImageHandler` | Image without timing encoding (for thumbnails) |
+| `WS /api/decode/<id>` | `DecodeWebSocketHandler` | Real-time decode progress over WebSocket |
+| `GET /` | Static | Landing page from `static/` |
+
+The encoding/decoding roles are swapped between demos: in Demo 1 the client encodes and server decodes; in Demo 2 the server encodes and the client decodes.
+
+### Deployment
+
+- **Hosted on:** Hostinger VPS (Ubuntu), runs as systemd service `temporalcloak`
+- **Auto-deploy:** `.github/workflows/deploy.yml` — pushes to `main` trigger SSH deploy (git pull + uv sync + restart)
+- **TLS:** Tornado handles TLS directly (no nginx) — critical because reverse proxies buffer chunks and destroy timing
+- **Service file:** `/etc/systemd/system/temporalcloak.service`
+- **Detailed plan:** `docs/deployment-plan.md`
+
+## Commit and PR Guidelines
+
+- Do NOT add `Co-Authored-By` lines to commit messages or PR descriptions.
 
 ## Key Implementation Details
 
 - Messages are ASCII-only; `encode_message()` rejects non-ASCII with a `UnicodeEncodeError` check
-- `bitstring` library is used throughout for bit-level operations (`BitArray`, `BitStream`, `Bits`)
+- `bitstring` library is used for bit-level operations (`BitArray`, `BitStream`, `Bits`)
 - Demo 2 uses Tornado's async `flush()` with `time.sleep` via executor for non-blocking delays
-- The quotes source file (`content/quotes/quotes.json`) uses `Windows-1252` encoding
+- The quotes file (`content/quotes/quotes.json`) is UTF-8 encoded
 - All imports use package-qualified paths: `from temporal_cloak.encoding import TemporalCloakEncoding`
