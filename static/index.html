@@ -216,6 +216,34 @@
             font-size: 0.85rem;
         }
 
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 16px;
+            margin-top: 12px;
+        }
+
+        .pagination button {
+            padding: 6px 14px;
+            background: #222233;
+            color: #00ffd5;
+            border: 1px solid #333;
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .pagination button:hover:not(:disabled) { background: #2a2a3a; }
+        .pagination button:disabled { opacity: 0.3; cursor: not-allowed; }
+
+        .pagination .page-info {
+            color: #555;
+            font-size: 0.75rem;
+        }
+
         @keyframes fadeIn {
             from { opacity: 0; transform: translateY(8px); }
             to { opacity: 1; transform: translateY(0); }
@@ -243,6 +271,11 @@
                 <label>Choose an Image</label>
                 <div id="imageGrid" class="image-grid">
                     <div class="loading">Loading images...</div>
+                </div>
+                <div id="pagination" class="pagination" style="display:none">
+                    <button id="prevBtn">Prev</button>
+                    <span id="pageInfo" class="page-info"></span>
+                    <button id="nextBtn">Next</button>
                 </div>
             </div>
 
@@ -276,6 +309,9 @@
 
         let selectedImage = null;
         let maxMessageLen = 200;
+        let allImages = [];
+        let currentPage = 0;
+        const PAGE_SIZE = 10;
 
         // ASCII validation
         function isAscii(str) {
@@ -324,25 +360,56 @@
         async function loadImages() {
             try {
                 const resp = await fetch('/api/images');
-                const images = await resp.json();
-                imageGrid.innerHTML = '';
-
-                images.forEach(img => {
-                    const thumb = document.createElement('div');
-                    thumb.className = 'image-thumb';
-                    thumb.innerHTML = `<img src="${img.url}" alt="${img.filename}" loading="lazy">`;
-                    thumb.addEventListener('click', () => {
-                        document.querySelectorAll('.image-thumb').forEach(t => t.classList.remove('selected'));
-                        thumb.classList.add('selected');
-                        selectedImage = img.filename;
-                        updateMaxLen(img.max_message_len);
-                    });
-                    imageGrid.appendChild(thumb);
-                });
+                allImages = await resp.json();
+                renderPage();
             } catch (e) {
                 imageGrid.innerHTML = '<div class="loading" style="color:#ff3366">Failed to load images</div>';
             }
         }
+
+        function renderPage() {
+            const totalPages = Math.ceil(allImages.length / PAGE_SIZE);
+            const start = currentPage * PAGE_SIZE;
+            const pageImages = allImages.slice(start, start + PAGE_SIZE);
+
+            imageGrid.innerHTML = '';
+            pageImages.forEach(img => {
+                const thumb = document.createElement('div');
+                thumb.className = 'image-thumb';
+                if (img.filename === selectedImage) thumb.classList.add('selected');
+                thumb.innerHTML = `<img src="${img.url}" alt="${img.filename}" loading="lazy">`;
+                thumb.addEventListener('click', () => {
+                    document.querySelectorAll('.image-thumb').forEach(t => t.classList.remove('selected'));
+                    thumb.classList.add('selected');
+                    selectedImage = img.filename;
+                    updateMaxLen(img.max_message_len);
+                });
+                imageGrid.appendChild(thumb);
+            });
+
+            const pagination = document.getElementById('pagination');
+            const prevBtn = document.getElementById('prevBtn');
+            const nextBtn = document.getElementById('nextBtn');
+            const pageInfo = document.getElementById('pageInfo');
+
+            if (totalPages > 1) {
+                pagination.style.display = 'flex';
+                prevBtn.disabled = currentPage === 0;
+                nextBtn.disabled = currentPage >= totalPages - 1;
+                pageInfo.textContent = `${currentPage + 1} / ${totalPages}`;
+            } else {
+                pagination.style.display = 'none';
+            }
+        }
+
+        document.getElementById('prevBtn').addEventListener('click', () => {
+            if (currentPage > 0) { currentPage--; renderPage(); }
+        });
+
+        document.getElementById('nextBtn').addEventListener('click', () => {
+            const totalPages = Math.ceil(allImages.length / PAGE_SIZE);
+            if (currentPage < totalPages - 1) { currentPage++; renderPage(); }
+        });
 
         function showError(msg) {
             errorMsg.textContent = msg;
