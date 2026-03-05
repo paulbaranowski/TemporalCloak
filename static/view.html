@@ -20,9 +20,25 @@
         }
 
         .container {
-            max-width: 800px;
+            max-width: 1100px;
             margin: 0 auto;
             padding: 40px 20px 80px;
+        }
+
+        .two-col {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 32px;
+            align-items: start;
+        }
+
+        .col-left { min-width: 0; }
+        .col-right { min-width: 0; }
+
+        @media (max-width: 768px) {
+            .two-col {
+                grid-template-columns: 1fr;
+            }
         }
 
         header { text-align: center; margin-bottom: 32px; }
@@ -40,29 +56,65 @@
         .image-display {
             text-align: center;
             margin-bottom: 24px;
+            background: #111118;
+            border: 1px solid #222233;
+            border-radius: 8px;
+            aspect-ratio: 4 / 3;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
         }
 
         .image-display img {
             max-width: 100%;
-            max-height: 360px;
-            border-radius: 8px;
-            border: 1px solid #222233;
+            max-height: 100%;
+            object-fit: contain;
+            border-radius: 7px;
         }
 
-        .image-placeholder {
-            width: 100%;
-            height: 200px;
-            border: 1px dashed #222233;
-            border-radius: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+        .image-display .placeholder-text {
             color: #333;
             font-size: 0.8rem;
         }
 
+        /* CTA banner */
+        .cta-banner {
+            margin-top: 24px;
+            padding: 16px 20px;
+            background: #111118;
+            border: 1px solid #222233;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .cta-banner p {
+            color: #888;
+            font-size: 0.85rem;
+            margin-bottom: 10px;
+        }
+
+        .cta-link {
+            display: inline-block;
+            padding: 8px 20px;
+            background: linear-gradient(135deg, #00ffd5 0%, #00cc99 100%);
+            color: #0a0a0f;
+            text-decoration: none;
+            border-radius: 5px;
+            font-size: 0.85rem;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            transition: transform 0.1s, box-shadow 0.2s;
+        }
+
+        .cta-link:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 16px rgba(0, 255, 213, 0.3);
+        }
+
         /* How it works */
         .how-it-works {
+            margin-top: 16px;
             margin-bottom: 28px;
             border: 1px solid #222233;
             border-radius: 8px;
@@ -157,7 +209,7 @@
         .btn:disabled { opacity: 0.3; cursor: not-allowed; }
 
         /* Visualization */
-        .viz { margin-top: 32px; }
+        .viz { margin-top: 24px; }
 
         .viz-section {
             margin-bottom: 20px;
@@ -223,6 +275,7 @@
             font-size: 0.8rem;
             line-height: 1.8;
             word-break: break-all;
+            min-height: 80px;
             max-height: 160px;
             overflow-y: auto;
         }
@@ -318,61 +371,72 @@
         <div id="errorPage" class="error-page" style="display:none"></div>
 
         <main id="mainContent" style="display:none">
-            <div class="image-display" id="imageDisplay">
-                <img id="linkImage" alt="Encoded image" style="display:none">
-                <div id="imagePlaceholder" class="image-placeholder">Image will load during decode</div>
-            </div>
-
-            <div id="messageSection" class="viz-section" style="display:none">
-                <div class="viz-label">Decoded Message</div>
-                <div class="message-reveal">
-                    <span class="message-text" id="messageText"></span>
-                    <span class="cursor" id="msgCursor"></span>
-                </div>
-                <div id="checksumSection" style="display:none; margin-top:8px;"></div>
-            </div>
-
-            <button id="decodeBtn" class="btn">Decode Hidden Message</button>
-
-            <div id="viz" class="viz" style="display:none">
-                <div class="stats-bar" id="statsBar">
-                    <div class="stat-item">Bits: <span class="stat-value" id="statBits">0</span></div>
-                    <div class="stat-item">Elapsed: <span class="stat-value" id="statElapsed">0.0s</span></div>
-                    <div class="stat-item">Threshold: <span class="stat-value" id="statThreshold">-</span></div>
-                    <div class="stat-item">Avg Conf: <span class="stat-value" id="statConf">-</span></div>
-                    <div class="stat-item">Bits/sec: <span class="stat-value" id="statBps">-</span></div>
-                </div>
-
-                <div class="viz-section">
-                    <div class="viz-label">Timing</div>
-                    <div class="timing-bars-container" id="timingBars"></div>
-                </div>
-
-                <div class="viz-section">
-                    <div class="viz-label">Bit Stream</div>
-                    <div class="bit-stream" id="bitStream"></div>
-                </div>
-            </div>
-
-            <div class="how-it-works">
-                <button class="how-toggle" id="howToggle">
-                    How does TemporalCloak work?
-                    <span class="arrow">&#9654;</span>
-                </button>
-                <div class="how-content" id="howContent">
-                    <p>TemporalCloak hides messages in the <strong style="color:#00ffd5">timing delays</strong> between data chunks &mdash; not in the data itself. The image you see is completely normal. The secret is in <em>when</em> each piece arrives.</p>
-                    <div class="delay-diagram">
-                        <div class="delay-bar bit1" style="height:14px;background:#00ff88;">1</div>
-                        <div class="delay-bar bit1" style="height:14px;background:#00ff88;">1</div>
-                        <div class="delay-bar bit0" style="height:46px;background:#ff8800;">0</div>
-                        <div class="delay-bar bit1" style="height:14px;background:#00ff88;">1</div>
-                        <div class="delay-bar bit0" style="height:46px;background:#ff8800;">0</div>
-                        <div class="delay-bar bit0" style="height:46px;background:#ff8800;">0</div>
-                        <div class="delay-bar bit1" style="height:14px;background:#00ff88;">1</div>
-                        <div class="delay-bar bit1" style="height:14px;background:#00ff88;">1</div>
-                        <div class="delay-label">&larr; short delay = <span class="code">1</span>, long delay = <span class="code">0</span></div>
+            <div class="two-col">
+                <div class="col-left">
+                    <div class="image-display" id="imageDisplay">
+                        <img id="linkImage" alt="Encoded image" style="display:none">
+                        <span class="placeholder-text" id="imagePlaceholder">Image will load during decode</span>
                     </div>
-                    <p>Each bit is encoded as a time gap: a <strong style="color:#00ff88">short delay</strong> means binary 1, a <strong style="color:#ff8800">longer delay</strong> means binary 0. A boundary marker (<span class="code">0xFF00</span>) frames the message. An 8-bit XOR checksum verifies integrity.</p>
+
+                    <div class="cta-banner">
+                        <p>Want to hide your own secret message?</p>
+                        <a href="/" class="cta-link">Create Your Own</a>
+                    </div>
+
+                    <div class="how-it-works">
+                        <button class="how-toggle" id="howToggle">
+                            How does TemporalCloak work?
+                            <span class="arrow">&#9654;</span>
+                        </button>
+                        <div class="how-content" id="howContent">
+                            <p>TemporalCloak hides messages in the <strong style="color:#00ffd5">timing delays</strong> between data chunks &mdash; not in the data itself. The image you see is completely normal. The secret is in <em>when</em> each piece arrives.</p>
+                            <div class="delay-diagram">
+                                <div class="delay-bar bit1" style="height:14px;background:#00ff88;">1</div>
+                                <div class="delay-bar bit1" style="height:14px;background:#00ff88;">1</div>
+                                <div class="delay-bar bit0" style="height:46px;background:#ff8800;">0</div>
+                                <div class="delay-bar bit1" style="height:14px;background:#00ff88;">1</div>
+                                <div class="delay-bar bit0" style="height:46px;background:#ff8800;">0</div>
+                                <div class="delay-bar bit0" style="height:46px;background:#ff8800;">0</div>
+                                <div class="delay-bar bit1" style="height:14px;background:#00ff88;">1</div>
+                                <div class="delay-bar bit1" style="height:14px;background:#00ff88;">1</div>
+                                <div class="delay-label">&larr; short delay = <span class="code">1</span>, long delay = <span class="code">0</span></div>
+                            </div>
+                            <p>Each bit is encoded as a time gap: a <strong style="color:#00ff88">short delay</strong> means binary 1, a <strong style="color:#ff8800">longer delay</strong> means binary 0. A boundary marker (<span class="code">0xFF00</span>) frames the message. An 8-bit XOR checksum verifies integrity.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-right">
+                    <div id="messageSection" class="viz-section">
+                        <div class="viz-label">Decoded Message</div>
+                        <div class="message-reveal">
+                            <span class="message-text" id="messageText"></span>
+                            <span class="cursor" id="msgCursor" style="display:none"></span>
+                        </div>
+                        <div id="checksumSection" style="display:none; margin-top:8px;"></div>
+                    </div>
+
+                    <button id="decodeBtn" class="btn">Decode Hidden Message</button>
+
+                    <div id="viz" class="viz">
+                        <div class="stats-bar" id="statsBar">
+                            <div class="stat-item">Bits: <span class="stat-value" id="statBits">0</span></div>
+                            <div class="stat-item">Elapsed: <span class="stat-value" id="statElapsed">0.0s</span></div>
+                            <div class="stat-item">Threshold: <span class="stat-value" id="statThreshold">-</span></div>
+                            <div class="stat-item">Avg Conf: <span class="stat-value" id="statConf">-</span></div>
+                            <div class="stat-item">Bits/sec: <span class="stat-value" id="statBps">-</span></div>
+                        </div>
+
+                        <div class="viz-section">
+                            <div class="viz-label">Timing</div>
+                            <div class="timing-bars-container" id="timingBars"></div>
+                        </div>
+
+                        <div class="viz-section">
+                            <div class="viz-label">Bit Stream</div>
+                            <div class="bit-stream" id="bitStream"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </main>
@@ -444,14 +508,10 @@
         }
 
         // ── Decode ──
-        const messageSection = document.getElementById('messageSection');
-
         decodeBtn.addEventListener('click', () => {
             decodeBtn.disabled = true;
             decodeBtn.textContent = 'Decoding...';
-            messageSection.style.display = '';
-            vizEl.style.display = 'block';
-            vizEl.classList.add('fade-in');
+            msgCursor.style.display = '';
             startDecode();
         });
 
