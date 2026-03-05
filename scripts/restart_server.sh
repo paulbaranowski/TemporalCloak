@@ -4,7 +4,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-PID=$(lsof -ti :8888 2>/dev/null) && kill "$PID" && echo "Killed existing server (PID $PID)" || echo "No existing server running"
+PIDS=$(lsof -ti :8888 2>/dev/null) && echo "$PIDS" | xargs kill && echo "Killed existing server (PID $PIDS)" || echo "No existing server running"
 
 sleep 1
 
