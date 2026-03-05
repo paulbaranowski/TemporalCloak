@@ -5,3 +5,4 @@ from temporal_cloak.client import TemporalCloakClient
 from temporal_cloak.server import TemporalCloakServer
 from temporal_cloak.quote_provider import QuoteProvider
 from temporal_cloak.image_provider import ImageProvider, ImageFile
+from temporal_cloak.link_store import LinkStore
