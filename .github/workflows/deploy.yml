@@ -16,6 +16,7 @@ jobs:
           key: ${{ secrets.HOSTINGER_SSH_KEY }}
           script: |
             cd /home/temporalcloak/app
+            git config --global --add safe.directory /home/temporalcloak/app
             git pull origin main
             ~/.local/bin/uv sync
             sudo systemctl restart temporalcloak
