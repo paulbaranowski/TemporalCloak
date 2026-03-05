@@ -21,6 +21,7 @@ from temporal_cloak.decoding import TemporalCloakDecoding
 from temporal_cloak.const import TemporalCloakConst
 from temporal_cloak.quote_provider import QuoteProvider
 from temporal_cloak.image_provider import ImageProvider
+from temporal_cloak.link_store import LinkStore
 
 logger = logging.getLogger("temporalcloak")
 
@@ -29,8 +30,7 @@ image_provider = ImageProvider(images_dir=config.IMAGES_DIR)
 
 start_time = time.monotonic()
 
-# In-memory link storage: {link_id: {message, image_path, image_filename, created_at}}
-links = {}
+link_store = LinkStore(config.DB_PATH)
 
 
 class ImageHandler(tornado.web.RequestHandler):
@@ -164,18 +164,23 @@ class CreateLinkHandler(tornado.web.RequestHandler):
             })
             return
 
+        burn_after_reading = bool(body.get("burn_after_reading", False))
+
         link_id = secrets.token_hex(4)
-        links[link_id] = {
-            "message": message,
-            "image_path": image_path,
-            "image_filename": image_filename,
-            "created_at": time.time(),
-        }
+        link_store.create(
+            link_id=link_id,
+            message=message,
+            image_path=image_path,
+            image_filename=image_filename,
+            created_at=time.time(),
+            burn_after_reading=burn_after_reading,
+        )
         logger.info(
-            "Created link %s: message='%s', image='%s'",
+            "Created link %s: message='%s', image='%s', burn=%s",
             link_id,
             message,
             image_filename,
+            burn_after_reading,
         )
 
         self.set_header("Content-Type", "application/json")
@@ -186,7 +191,7 @@ class LinkInfoHandler(tornado.web.RequestHandler):
     """Returns link metadata (without revealing the secret message)."""
 
     def get(self, link_id):
-        link = links.get(link_id)
+        link = link_store.get(link_id)
         if not link:
             self.set_status(404)
             self.write({"error": "Link not found"})
@@ -198,6 +203,7 @@ class LinkInfoHandler(tornado.web.RequestHandler):
                 "image_filename": link["image_filename"],
                 "created_at": link["created_at"],
                 "has_message": True,
+                "burn_after_reading": bool(link["burn_after_reading"]),
             }
         )
 
@@ -206,7 +212,7 @@ class EncodedImageHandler(tornado.web.RequestHandler):
     """Serves image with timing-encoded hidden message for a specific link."""
 
     async def get(self, link_id):
-        link = links.get(link_id)
+        link = link_store.get(link_id)
         if not link:
             self.set_status(404)
             self.write({"error": "Link not found"})
@@ -250,7 +256,7 @@ class NormalImageHandler(tornado.web.RequestHandler):
     """Serves image without timing encoding (for display in <img> tags)."""
 
     def get(self, link_id):
-        link = links.get(link_id)
+        link = link_store.get(link_id)
         if not link:
             self.set_status(404)
             self.write({"error": "Link not found"})
@@ -288,7 +294,7 @@ class DecodeWebSocketHandler(tornado.websocket.WebSocketHandler):
             return
 
         if data.get("action") == "start":
-            link = links.get(self.link_id)
+            link = link_store.get(self.link_id)
             if not link:
                 self.write_message(
                     json.dumps({"type": "error", "message": "Link not found"})
@@ -315,7 +321,7 @@ class DecodeWebSocketHandler(tornado.websocket.WebSocketHandler):
 
     def _decode_thread(self):
         """Fetch the encoded image and decode timing in a worker thread."""
-        link = links.get(self.link_id)
+        link = link_store.get(self.link_id)
         if not link:
             self._enqueue({"type": "error", "message": "Link not found"})
             self._enqueue(None)
@@ -400,6 +406,7 @@ class DecodeWebSocketHandler(tornado.websocket.WebSocketHandler):
                             "elapsed": round(elapsed, 3),
                         }
                     )
+                    link_store.mark_delivered(self.link_id)
                     break
 
             if not decoder.completed:

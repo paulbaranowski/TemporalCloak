@@ -8,6 +8,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 QUOTES_PATH = os.path.join(BASE_DIR, "content", "quotes", "quotes.json")
 IMAGES_DIR = os.path.join(BASE_DIR, "content", "images")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
+DB_PATH = os.getenv("TC_DB_PATH", os.path.join(BASE_DIR, "data", "links.db"))
 
 # --- Production deployment values (Hostinger VPS) ---
 # Set these as environment variables in the systemd service, or uncomment
