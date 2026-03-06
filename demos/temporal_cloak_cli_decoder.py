@@ -1,7 +1,7 @@
 import sys
 import math
 import requests
-from temporal_cloak.decoding import DistributedDecoder
+from temporal_cloak.decoding import AutoDecoder
 from temporal_cloak.const import TemporalCloakConst
 import humanize
 
@@ -21,7 +21,7 @@ def main():
     content_length = int(response.headers.get("Content-Length", 0))
     total_gaps = math.ceil(content_length / chunk_size) - 1 if content_length else 0
 
-    cloak = DistributedDecoder(total_gaps, debug=True)
+    cloak = AutoDecoder(total_gaps, debug=True)
 
     total_bytes = 0
     first_chunk = True

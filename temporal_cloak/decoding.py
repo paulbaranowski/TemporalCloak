@@ -10,6 +10,7 @@ class TemporalCloakDecoding:
     Subclasses implement mark_time() with mode-specific gap handling.
     """
 
+    BOUNDARY = TemporalCloakConst.BOUNDARY_BITS
     BOUNDARY_LEN = len(BitArray(TemporalCloakConst.BOUNDARY_BITS))
 
     # Extra bits after the start boundary before message payload begins.
@@ -81,8 +82,8 @@ class TemporalCloakDecoding:
         self._bits.append(bits)
 
     @staticmethod
-    def find_boundary(bits: BitStream, start_pos=0) -> int:
-        boundary = Bits(TemporalCloakConst.BOUNDARY_BITS)
+    def find_boundary(bits: BitStream, start_pos=0, boundary_hex=None) -> int:
+        boundary = Bits(boundary_hex or TemporalCloakConst.BOUNDARY_BITS)
         # the "find" function returns a tuple which only has data in it if it was successful
         # it will return (<num>,) if it found something, otherwise ()
         pos = bits.find(boundary, start_pos)
@@ -155,14 +156,14 @@ class TemporalCloakDecoding:
             self.calibrate_from_boundary()
 
         completed = False
-        begin_pos = TemporalCloakDecoding.find_boundary(self._bits)
+        begin_pos = TemporalCloakDecoding.find_boundary(self._bits, boundary_hex=self.BOUNDARY)
         if begin_pos is None:
             self._eom = None
             return "", False, None
         begin_pos += self.BOUNDARY_LEN
         # Skip any extra preamble bits (e.g. key + length in distributed mode)
         begin_pos += self._preamble_extra_bits
-        end_pos = TemporalCloakDecoding.find_boundary(self._bits, begin_pos)
+        end_pos = TemporalCloakDecoding.find_boundary(self._bits, begin_pos, boundary_hex=self.BOUNDARY)
         if end_pos is not None:
             completed = True
             self._eom = end_pos
@@ -251,6 +252,8 @@ class DistributedDecoder(TemporalCloakDecoding):
     carry real bits; all other gaps are filler and are skipped.
     """
 
+    BOUNDARY = TemporalCloakConst.BOUNDARY_BITS_DISTRIBUTED
+
     _preamble_extra_bits = (TemporalCloakConst.DIST_KEY_BITS
                             + TemporalCloakConst.DIST_LENGTH_BITS)
 
@@ -321,3 +324,131 @@ class DistributedDecoder(TemporalCloakDecoding):
     def __repr__(self):
         return (f"DistributedDecoder(total_gaps={self._total_gaps}, "
                 f"bits='{self._bits}', completed='{self._completed}')")
+
+
+class AutoDecoder:
+    """Auto-detects encoding mode from the boundary marker in the timing stream.
+
+    Collects the first 16 timing delays (the boundary), checks the last bit
+    to determine the mode, then delegates to the appropriate decoder.
+
+    - Boundary 0xFF00 (bit 15 = 0) -> FrontloadedDecoder
+    - Boundary 0xFF01 (bit 15 = 1) -> DistributedDecoder
+
+    After bootstrapping, all subsequent calls are forwarded to the delegate.
+    The replay feeds collected delays directly via add_bit_by_delay() to avoid
+    timing issues with time.monotonic()-based mark_time().
+    """
+
+    def __init__(self, total_gaps: int, debug=False):
+        self._total_gaps = total_gaps
+        self._debug = debug
+        self._bootstrap_delays = []
+        self._delegate = None
+        self._mode = None
+        self._start_time = None
+        self._last_recv_time = None
+
+    @property
+    def delegate(self):
+        return self._delegate
+
+    @property
+    def mode(self):
+        return self._mode
+
+    @property
+    def bits(self):
+        if self._delegate:
+            return self._delegate.bits
+        return BitStream()
+
+    @property
+    def completed(self):
+        if self._delegate:
+            return self._delegate.completed
+        return False
+
+    @property
+    def checksum_valid(self):
+        if self._delegate:
+            return self._delegate.checksum_valid
+        return None
+
+    @property
+    def threshold(self):
+        if self._delegate:
+            return self._delegate.threshold
+        return TemporalCloakConst.MIDPOINT_TIME
+
+    @property
+    def confidence_scores(self):
+        if self._delegate:
+            return self._delegate.confidence_scores
+        return []
+
+    @property
+    def _last_message(self):
+        if self._delegate:
+            return self._delegate._last_message
+        return None
+
+    def start_timer(self):
+        self._start_time = time.monotonic()
+        self._last_recv_time = self._start_time
+
+    def bits_to_message(self):
+        if self._delegate:
+            return self._delegate.bits_to_message()
+        return "", False, None
+
+    def mark_time(self) -> float:
+        current_time = time.monotonic()
+        time_diff = current_time - self._last_recv_time
+        self._last_recv_time = current_time
+
+        if self._delegate is not None:
+            # Already bootstrapped — forward directly
+            self._delegate._last_recv_time = current_time - time_diff
+            self._delegate.mark_time()
+            return time_diff
+
+        # Still collecting boundary bits
+        self._bootstrap_delays.append(time_diff)
+
+        boundary_len = TemporalCloakDecoding.BOUNDARY_LEN
+        if len(self._bootstrap_delays) < boundary_len:
+            return time_diff
+
+        # We have 16 delays — determine mode from the last bit
+        ones_delays = self._bootstrap_delays[0:8]
+        zeros_delays = self._bootstrap_delays[8:16]
+        avg_one = sum(ones_delays) / len(ones_delays)
+        avg_zero = sum(zeros_delays) / len(zeros_delays)
+        threshold = (avg_one + avg_zero) / 2.0
+
+        last_bit = 1 if self._bootstrap_delays[-1] <= threshold else 0
+
+        if last_bit == 1:
+            self._mode = "distributed"
+            self._delegate = DistributedDecoder(self._total_gaps, debug=self._debug)
+        else:
+            self._mode = "frontloaded"
+            self._delegate = FrontloadedDecoder(debug=self._debug)
+
+        # Replay collected delays into the delegate directly via add_bit_by_delay.
+        # This avoids timing issues since mark_time() uses time.monotonic().
+        self._delegate._start_time = self._start_time or current_time
+        self._delegate._last_recv_time = self._delegate._start_time
+        for i, delay in enumerate(self._bootstrap_delays):
+            self._delegate.add_bit_by_delay(delay)
+            if self._mode == "distributed":
+                self._delegate._gap_index += 1
+                if self._delegate._gap_index == TemporalCloakConst.PREAMBLE_BITS:
+                    self._delegate._process_preamble()
+
+        return time_diff
+
+    def __repr__(self):
+        return (f"AutoDecoder(mode={self._mode!r}, "
+                f"delegate={self._delegate!r})")

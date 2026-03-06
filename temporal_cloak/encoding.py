@@ -11,6 +11,8 @@ class TemporalCloakEncoding:
     Subclasses implement _build_delays() to produce mode-specific delay lists.
     """
 
+    BOUNDARY = TemporalCloakConst.BOUNDARY_BITS
+
     def __init__(self):
         self._message = None
         self._message_encoded = None
@@ -66,8 +68,8 @@ class TemporalCloakEncoding:
         checksum_bits = BitArray(uint=checksum, length=8)
         self._message_bits_padded = BitArray(self._message_bits)
         self._message_bits_padded.append(checksum_bits)
-        self._message_bits_padded.prepend(TemporalCloakConst.BOUNDARY_BITS)
-        self._message_bits_padded.append(TemporalCloakConst.BOUNDARY_BITS)
+        self._message_bits_padded.prepend(self.BOUNDARY)
+        self._message_bits_padded.append(self.BOUNDARY)
         print("Message bits with boundary: {}".format(self._message_bits_padded))
         self._build_delays()
 
@@ -143,6 +145,8 @@ class DistributedEncoder(TemporalCloakEncoding):
     the full delay list. The delay list is also stored in self.delays.
     """
 
+    BOUNDARY = TemporalCloakConst.BOUNDARY_BITS_DISTRIBUTED
+
     @staticmethod
     def compute_bit_positions(key: int, total_gaps: int, num_remaining_bits: int) -> list:
         """Deterministically select which gap positions carry message bits.
@@ -181,7 +185,7 @@ class DistributedEncoder(TemporalCloakEncoding):
         key = random.randint(0, 255)
 
         # Build preamble bits: boundary (16) + key (8) + msg_len (8)
-        preamble_bits = BitArray(TemporalCloakConst.BOUNDARY_BITS)
+        preamble_bits = BitArray(self.BOUNDARY)
         preamble_bits.append(BitArray(uint=key, length=TemporalCloakConst.DIST_KEY_BITS))
         preamble_bits.append(BitArray(uint=msg_len, length=TemporalCloakConst.DIST_LENGTH_BITS))
 
@@ -189,7 +193,7 @@ class DistributedEncoder(TemporalCloakEncoding):
         remaining_data = BitArray(self._message_bits)
         checksum = TemporalCloakEncoding.compute_checksum(self._message_encoded)
         remaining_data.append(BitArray(uint=checksum, length=8))
-        remaining_data.append(BitArray(TemporalCloakConst.BOUNDARY_BITS))
+        remaining_data.append(BitArray(self.BOUNDARY))
 
         num_remaining_bits = len(remaining_data)
         bit_positions = DistributedEncoder.compute_bit_positions(

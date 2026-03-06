@@ -19,6 +19,7 @@ class TemporalCloakConst:
     # If bits are dropped or missed, the message receiver can look
     # for these bits to reset itself.
     BOUNDARY_BITS = "0xFF00"
+    BOUNDARY_BITS_DISTRIBUTED = "0xFF01"
 
     # This is used for the size of the data chunk sent by the server.
     # Without chunking the data, the download speed will be too slow.

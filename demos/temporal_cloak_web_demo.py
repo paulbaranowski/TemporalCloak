@@ -16,8 +16,8 @@ import requests as requests_lib
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import config
-from temporal_cloak.encoding import DistributedEncoder
-from temporal_cloak.decoding import DistributedDecoder
+from temporal_cloak.encoding import FrontloadedEncoder, DistributedEncoder
+from temporal_cloak.decoding import AutoDecoder
 from temporal_cloak.const import TemporalCloakConst
 from temporal_cloak.quote_provider import QuoteProvider
 from temporal_cloak.image_provider import ImageProvider
@@ -110,6 +110,8 @@ class ImageListHandler(tornado.web.RequestHandler):
                         "url": f"/hosted/{fname}",
                         "size": file_size,
                         "max_message_len": DistributedEncoder.max_message_len(file_size),
+                        "max_message_len_frontloaded": FrontloadedEncoder.max_message_len(file_size),
+                        "max_message_len_distributed": DistributedEncoder.max_message_len(file_size),
                     }
                 )
         self.set_header("Content-Type", "application/json")
@@ -156,10 +158,19 @@ class CreateLinkHandler(tornado.web.RequestHandler):
             self.write({"error": "Image not found"})
             return
 
+        # Determine encoding mode
+        mode = body.get("mode", "distributed")
+        if mode not in ("frontloaded", "distributed"):
+            self.set_status(400)
+            self.write({"error": "Invalid mode (must be 'frontloaded' or 'distributed')"})
+            return
+
+        encoder_cls = FrontloadedEncoder if mode == "frontloaded" else DistributedEncoder
+
         # Validate image is large enough to carry the message
         image_size = os.path.getsize(real_image)
-        if not DistributedEncoder.validate_image_size(image_size, len(message)):
-            max_chars = DistributedEncoder.max_message_len(image_size)
+        if not encoder_cls.validate_image_size(image_size, len(message)):
+            max_chars = encoder_cls.max_message_len(image_size)
             self.set_status(400)
             self.write({
                 "error": f"Message too long for this image. "
@@ -179,6 +190,7 @@ class CreateLinkHandler(tornado.web.RequestHandler):
             image_filename=image_filename,
             created_at=time.time(),
             burn_after_reading=burn_after_reading,
+            mode=mode,
         )
         logger.info(
             "Created link %s: message='%s', image='%s', burn=%s",
@@ -231,9 +243,16 @@ class EncodedImageHandler(tornado.web.RequestHandler):
         self.set_header("Content-Type", "image/jpeg")
 
         image_size = os.path.getsize(link["image_path"])
-        cloak = DistributedEncoder()
-        cloak.message = link["message"]
-        distributed_delays = cloak.generate_delays(image_size)
+        mode = link.get("mode", "distributed")
+
+        if mode == "frontloaded":
+            cloak = FrontloadedEncoder()
+            cloak.message = link["message"]
+            delays = list(cloak.delays)
+        else:
+            cloak = DistributedEncoder()
+            cloak.message = link["message"]
+            delays = cloak.generate_delays(image_size)
 
         self.set_header("Content-Length", str(image_size))
         gap_index = 0
@@ -245,8 +264,8 @@ class EncodedImageHandler(tornado.web.RequestHandler):
                     break
                 if first_chunk:
                     first_chunk = False
-                else:
-                    delay = distributed_delays[gap_index]
+                elif gap_index < len(delays):
+                    delay = delays[gap_index]
                     gap_index += 1
                     if delay > 0:
                         await tornado.ioloop.IOLoop.current().run_in_executor(
@@ -347,27 +366,35 @@ class DecodeWebSocketHandler(tornado.websocket.WebSocketHandler):
             chunk_size = TemporalCloakConst.CHUNK_SIZE_TORNADO
             total_gaps = math.ceil(content_length / chunk_size) - 1 if content_length else 0
 
-            decoder = DistributedDecoder(total_gaps)
+            decoder = AutoDecoder(total_gaps)
 
             first_chunk = True
             bit_index = 0
             gap_index = 0
             last_recv_time = None
             decode_start = None
-            preamble_bits = TemporalCloakConst.PREAMBLE_BITS
-            boundary_len = DistributedDecoder.BOUNDARY_LEN
+            boundary_len = 16  # BOUNDARY_LEN
             stable_message = ""
             prev_bits_len = 0
+            total_bytes = 0
 
             for chunk in response.iter_content(chunk_size=chunk_size):
                 if not chunk:
                     continue
 
+                total_bytes += len(chunk)
+
                 if first_chunk:
                     last_recv_time = time.monotonic()
                     decode_start = last_recv_time
+                    decoder._start_time = last_recv_time
+                    decoder._last_recv_time = last_recv_time
                     first_chunk = False
-                    self._enqueue({"type": "sync", "timestamp": 0})
+                    self._enqueue({
+                        "type": "sync",
+                        "timestamp": 0,
+                        "content_length": content_length,
+                    })
                     continue
 
                 current_time = time.monotonic()
@@ -375,7 +402,7 @@ class DecodeWebSocketHandler(tornado.websocket.WebSocketHandler):
                 last_recv_time = current_time
                 elapsed = current_time - decode_start
 
-                # Let the decoder handle gap filtering internally
+                # Let the AutoDecoder handle mode detection and gap filtering
                 decoder._last_recv_time = last_recv_time - time_diff
                 decoder.mark_time()
 
@@ -391,14 +418,26 @@ class DecodeWebSocketHandler(tornado.websocket.WebSocketHandler):
                     )
                     bit_value = int(decoder.bits[-1])
 
-                    if gap_index < boundary_len:
-                        phase = "boundary_start"
-                    elif gap_index < preamble_bits:
-                        phase = "preamble"
+                    # Determine phase based on detected mode
+                    if decoder.mode == "distributed":
+                        preamble_bits = TemporalCloakConst.PREAMBLE_BITS
+                        if gap_index < boundary_len:
+                            phase = "boundary_start"
+                        elif gap_index < preamble_bits:
+                            phase = "preamble"
+                        else:
+                            phase = "data"
                     else:
-                        phase = "data"
+                        if gap_index < boundary_len:
+                            phase = "boundary_start"
+                        else:
+                            phase = "data"
 
                     # Only include fully-decoded characters
+                    if decoder.mode == "distributed":
+                        preamble_bits = TemporalCloakConst.PREAMBLE_BITS
+                    else:
+                        preamble_bits = boundary_len
                     data_bits_so_far = bit_index - preamble_bits + 1 if bit_index >= preamble_bits else 0
                     if not decoder.completed and data_bits_so_far > 0:
                         msg, _, _ = decoder.bits_to_message()
@@ -408,6 +447,7 @@ class DecodeWebSocketHandler(tornado.websocket.WebSocketHandler):
                         if len(truncated) > len(stable_message):
                             stable_message = truncated
 
+                    progress = total_bytes / content_length if content_length else 0
                     event = {
                         "type": "bit",
                         "index": bit_index,
@@ -418,22 +458,36 @@ class DecodeWebSocketHandler(tornado.websocket.WebSocketHandler):
                         "message_so_far": stable_message,
                         "threshold": round(decoder.threshold, 6),
                         "elapsed": round(elapsed, 3),
+                        "progress": round(progress, 4),
                     }
+                    if decoder.mode:
+                        event["mode"] = decoder.mode
                     self._enqueue(event)
                     bit_index += 1
+                else:
+                    # Non-bit chunk — still send progress for image reveal
+                    progress = total_bytes / content_length if content_length else 0
+                    self._enqueue({
+                        "type": "progress",
+                        "progress": round(progress, 4),
+                    })
 
-                    if decoder.completed:
-                        self._enqueue(
-                            {
-                                "type": "complete",
-                                "message": decoder._last_message,
-                                "checksum_valid": decoder.checksum_valid,
-                                "total_bits": bit_index,
-                                "threshold": round(decoder.threshold, 6),
-                                "elapsed": round(elapsed, 3),
-                            }
-                        )
-                        link_store.mark_delivered(self.link_id)
+                # Check completion OUTSIDE the new-bits guard, because
+                # display_completed() truncates bits internally
+                if decoder.completed:
+                    self._enqueue(
+                        {
+                            "type": "complete",
+                            "message": decoder._last_message,
+                            "checksum_valid": decoder.checksum_valid,
+                            "total_bits": bit_index,
+                            "threshold": round(decoder.threshold, 6),
+                            "elapsed": round(elapsed, 3),
+                            "mode": decoder.mode,
+                        }
+                    )
+                    link_store.mark_delivered(self.link_id)
+                    break
 
                 gap_index += 1
 

@@ -146,5 +146,67 @@ class TestBoundaryCollisionGuard(unittest.TestCase):
         self.assertFalse(success)
 
 
+class TestEncodingEdgeCases(unittest.TestCase):
+    """Edge cases for encoding: empty messages, max length, special chars, boundary attributes."""
+
+    # --- Empty message ---
+
+    def test_frontloaded_empty_message(self):
+        """FrontloadedEncoder with empty string produces boundary + checksum + boundary delays."""
+        enc = FrontloadedEncoder()
+        enc.message = ""
+        expected_bits = FrontloadedEncoder.bits_required(0)  # 40
+        self.assertEqual(len(enc.delays), expected_bits)
+
+    def test_distributed_empty_message(self):
+        """DistributedEncoder with empty string still produces delays."""
+        enc = DistributedEncoder()
+        enc.message = ""
+        delays = enc.generate_delays(50000)
+        self.assertGreater(len(delays), 0)
+
+    # --- Max distributed length ---
+
+    def test_distributed_max_length_255(self):
+        """DistributedEncoder with exactly 255 ASCII chars should succeed."""
+        enc = DistributedEncoder()
+        enc.message = "A" * 255
+        delays = enc.generate_delays(1_000_000)
+        self.assertGreater(len(delays), 0)
+
+    def test_distributed_over_max_length_raises(self):
+        """DistributedEncoder with 256 chars should raise ValueError."""
+        enc = DistributedEncoder()
+        enc.message = "A" * 256
+        with self.assertRaises(ValueError):
+            enc.generate_delays(1_000_000)
+
+    # --- Special ASCII boundary characters ---
+
+    def test_special_ascii_chars_encode(self):
+        """Characters \\x01, \\x7f, and \\x00 (null) should encode without error."""
+        enc = FrontloadedEncoder()
+        enc.message = "\x01\x7f\x00"
+        self.assertEqual(len(enc.delays), FrontloadedEncoder.bits_required(3))
+
+    def test_null_byte_message_roundtrip_bits(self):
+        """Null byte message bits are properly formed with boundaries."""
+        enc = FrontloadedEncoder()
+        enc.message = "\x00"
+        boundary = BitArray(TemporalCloakConst.BOUNDARY_BITS)
+        pos1 = enc._message_bits_padded.find(boundary)
+        self.assertTrue(len(pos1) > 0)
+        pos2 = enc._message_bits_padded.find(boundary, pos1[0] + 1)
+        self.assertTrue(len(pos2) > 0)
+
+    # --- Boundary class attribute correctness ---
+
+    def test_frontloaded_boundary_attribute(self):
+        self.assertEqual(FrontloadedEncoder.BOUNDARY, TemporalCloakConst.BOUNDARY_BITS)
+
+    def test_distributed_boundary_attribute(self):
+        self.assertEqual(DistributedEncoder.BOUNDARY, TemporalCloakConst.BOUNDARY_BITS_DISTRIBUTED)
+
+
 if __name__ == '__main__':
     unittest.main()
