@@ -5,7 +5,17 @@ import warnings
 
 
 class TemporalCloakDecoding:
+    """Base decoder with shared bit manipulation, calibration, and message parsing.
+
+    Subclasses implement mark_time() with mode-specific gap handling.
+    """
+
     BOUNDARY_LEN = len(BitArray(TemporalCloakConst.BOUNDARY_BITS))
+
+    # Extra bits after the start boundary before message payload begins.
+    # FrontloadedDecoder: 0 (payload immediately follows boundary)
+    # DistributedDecoder: 16 (key + length follow boundary)
+    _preamble_extra_bits = 0
 
     def __init__(self, debug=False):
         self._bits = BitStream()
@@ -150,6 +160,8 @@ class TemporalCloakDecoding:
             self._eom = None
             return "", False, None
         begin_pos += self.BOUNDARY_LEN
+        # Skip any extra preamble bits (e.g. key + length in distributed mode)
+        begin_pos += self._preamble_extra_bits
         end_pos = TemporalCloakDecoding.find_boundary(self._bits, begin_pos)
         if end_pos is not None:
             completed = True
@@ -172,7 +184,6 @@ class TemporalCloakDecoding:
         return decoded, completed, end_pos
 
     def jump_to_next_message(self) -> None:
-        # print("EOM: {}".format(self._eom))
         self._bits = self._bits[self._eom:]
 
     # Call this when you get the first chunk of data
@@ -183,27 +194,9 @@ class TemporalCloakDecoding:
         if self._debug:
             print(msg)
 
-    # call this when you get a chunk of data
-    # it automatically adds the bit to the received message
-    # will automatically print out the message if it finds a completed message
     def mark_time(self) -> float:
-        # Get the current time
-        current_time = time.monotonic()
-        # Calculate the time difference between the current and last received byte
-        time_diff = current_time - self._last_recv_time
-        # Update last received time
-        self._last_recv_time = current_time
-        # Add the bit to the message
-        self.add_bit_by_delay(time_diff)
-        #self.log(self._bits.bin)
-        # Try to decode the message
-        decode_attempt, self._completed, end_pos = self.bits_to_message()
-        # print(decode_attempt)
-        if self._completed:
-            # we got the whole message!
-            self.display_completed(decode_attempt)
-        # Return time difference
-        return time_diff
+        """Record a timing gap and decode. Subclasses override for mode-specific logic."""
+        raise NotImplementedError("Use FrontloadedDecoder or DistributedDecoder")
 
     def display_completed(self, decode_attempt: str) -> None:
         if not decode_attempt:
@@ -224,3 +217,107 @@ class TemporalCloakDecoding:
 
     def __repr__(self):
         return f"TemporalCloakDecoding(bits='{self._bits}', completed='{self._completed}')"
+
+
+class FrontloadedDecoder(TemporalCloakDecoding):
+    """Decodes messages where all bits are contiguous in the first N chunks.
+
+    Every gap between chunks carries a real bit.
+    """
+
+    _preamble_extra_bits = 0
+
+    def mark_time(self) -> float:
+        current_time = time.monotonic()
+        time_diff = current_time - self._last_recv_time
+        self._last_recv_time = current_time
+
+        self.add_bit_by_delay(time_diff)
+
+        decode_attempt, self._completed, end_pos = self.bits_to_message()
+        if self._completed:
+            self.display_completed(decode_attempt)
+        return time_diff
+
+    def __repr__(self):
+        return f"FrontloadedDecoder(bits='{self._bits}', completed='{self._completed}')"
+
+
+class DistributedDecoder(TemporalCloakDecoding):
+    """Decodes messages with bits scattered across chunks via a PRNG key.
+
+    The first 32 gaps form a contiguous preamble (boundary + key + msg_len).
+    After the preamble, only gaps at pseudo-randomly selected positions
+    carry real bits; all other gaps are filler and are skipped.
+    """
+
+    _preamble_extra_bits = (TemporalCloakConst.DIST_KEY_BITS
+                            + TemporalCloakConst.DIST_LENGTH_BITS)
+
+    def __init__(self, total_gaps: int, debug=False):
+        super().__init__(debug)
+        self._total_gaps = total_gaps
+        self._gap_index = 0
+        self._bit_positions = None
+        self._preamble_collected = False
+
+    def _process_preamble(self) -> None:
+        """After collecting 32 preamble bits, extract key and message length,
+        then compute bit positions for the remaining data."""
+        from temporal_cloak.encoding import DistributedEncoder
+
+        boundary_len = self.BOUNDARY_LEN
+
+        # Calibrate from the boundary (bits 0-15)
+        if self._adaptive_threshold is None and len(self._time_delays) >= boundary_len:
+            self.calibrate_from_boundary()
+
+        # Extract key (bits 16-23) and msg_len (bits 24-31)
+        key = self._bits[boundary_len:boundary_len + TemporalCloakConst.DIST_KEY_BITS].uint
+        preamble = TemporalCloakConst.PREAMBLE_BITS
+        msg_len = self._bits[boundary_len + TemporalCloakConst.DIST_KEY_BITS:preamble].uint
+
+        # Remaining bits: message payload + checksum (8) + end boundary (16)
+        remaining_bits = msg_len * 8 + 8 + boundary_len
+
+        self._bit_positions = set(
+            DistributedEncoder.compute_bit_positions(
+                key, self._total_gaps, remaining_bits)
+        )
+        self._preamble_collected = True
+        self.log(f"Distributed preamble: key={key}, msg_len={msg_len}, "
+                 f"remaining_bits={remaining_bits}, positions={len(self._bit_positions)}")
+
+    def mark_time(self) -> float:
+        current_time = time.monotonic()
+        time_diff = current_time - self._last_recv_time
+        self._last_recv_time = current_time
+
+        gap_idx = self._gap_index
+        self._gap_index += 1
+
+        preamble = TemporalCloakConst.PREAMBLE_BITS
+        if gap_idx < preamble:
+            # Contiguous preamble — always process
+            self.add_bit_by_delay(time_diff)
+            if gap_idx == preamble - 1:
+                self._process_preamble()
+        elif self._bit_positions is not None and gap_idx in self._bit_positions:
+            # This gap carries a real bit
+            self.add_bit_by_delay(time_diff)
+        else:
+            # Filler gap — skip
+            return time_diff
+
+        # Don't try to decode until preamble is fully collected
+        if not self._preamble_collected:
+            return time_diff
+
+        decode_attempt, self._completed, end_pos = self.bits_to_message()
+        if self._completed:
+            self.display_completed(decode_attempt)
+        return time_diff
+
+    def __repr__(self):
+        return (f"DistributedDecoder(total_gaps={self._total_gaps}, "
+                f"bits='{self._bits}', completed='{self._completed}')")

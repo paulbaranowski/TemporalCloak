@@ -24,3 +24,10 @@ class TemporalCloakConst:
     # Without chunking the data, the download speed will be too slow.
     CHUNK_SIZE_TORNADO = 256
 
+    # Distributed mode constants
+    # Preamble: 16 (boundary) + 8 (key) + 8 (message length) = 32 bits
+    PREAMBLE_BITS = 32
+    DIST_KEY_BITS = 8
+    DIST_LENGTH_BITS = 8
+    MAX_DISTRIBUTED_MSG_LEN = 255
+

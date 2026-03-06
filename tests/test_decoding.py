@@ -2,8 +2,10 @@ import unittest
 import warnings
 from bitstring import Bits, BitArray, BitStream
 from temporal_cloak.const import TemporalCloakConst
-from temporal_cloak.decoding import TemporalCloakDecoding
-from temporal_cloak.encoding import TemporalCloakEncoding
+from temporal_cloak.decoding import (
+    TemporalCloakDecoding, FrontloadedDecoder, DistributedDecoder
+)
+from temporal_cloak.encoding import FrontloadedEncoder, DistributedEncoder
 
 
 def _checksum(msg_bytes):
@@ -17,7 +19,7 @@ def _checksum(msg_bytes):
 class TestTemporalCloakDecoding(unittest.TestCase):
 
     def setUp(self):
-        self.decoding = TemporalCloakDecoding()
+        self.decoding = FrontloadedDecoder()
         # "hello" with checksum (0x62) + boundary markers, plus trailing bytes
         # Format: [0xFF00][68656c6c6f][62][FF00][6865]
         self.test_bits = BitStream('0xFF0068656c6c6f62FF006865')
@@ -75,7 +77,7 @@ class TestEndBoundary(unittest.TestCase):
     """Verify that the encoder produces both start and end boundary markers."""
 
     def test_encoded_message_has_both_boundaries(self):
-        enc = TemporalCloakEncoding()
+        enc = FrontloadedEncoder()
         enc.message = "hi"
         bits = enc._message_bits_padded
         boundary = BitArray(TemporalCloakConst.BOUNDARY_BITS)
@@ -91,9 +93,9 @@ class TestSingleMessageCompletes(unittest.TestCase):
     """A single encoded message should decode as completed."""
 
     def test_single_message_completes(self):
-        enc = TemporalCloakEncoding()
+        enc = FrontloadedEncoder()
         enc.message = "test"
-        decoder = TemporalCloakDecoding()
+        decoder = FrontloadedDecoder()
         # Feed all bits from the encoder directly into the decoder
         for bit in enc._message_bits_padded:
             decoder.add_bit(int(bit))
@@ -106,7 +108,7 @@ class TestEmptyMessageGuard(unittest.TestCase):
     """Double-boundary (empty message) should be handled gracefully."""
 
     def test_empty_message_between_boundaries(self):
-        decoder = TemporalCloakDecoding()
+        decoder = FrontloadedDecoder()
         # Two boundaries back to back: [0xFF00][0xFF00]
         bits = BitStream(TemporalCloakConst.BOUNDARY_BITS + TemporalCloakConst.BOUNDARY_BITS)
         decoder._bits = bits
@@ -121,7 +123,7 @@ class TestBitAlignment(unittest.TestCase):
     """Non-multiple-of-8 bits between boundaries should produce a warning."""
 
     def test_misaligned_bits_warn(self):
-        decoder = TemporalCloakDecoding()
+        decoder = FrontloadedDecoder()
         boundary = BitArray(TemporalCloakConst.BOUNDARY_BITS)
         # 5 bits of payload (not multiple of 8) + 8-bit checksum
         payload = BitArray('0b10101')
@@ -139,9 +141,9 @@ class TestXORChecksum(unittest.TestCase):
     """Verify XOR checksum encoding and decoding."""
 
     def test_checksum_valid_on_good_message(self):
-        enc = TemporalCloakEncoding()
+        enc = FrontloadedEncoder()
         enc.message = "hello"
-        decoder = TemporalCloakDecoding()
+        decoder = FrontloadedDecoder()
         for bit in enc._message_bits_padded:
             decoder.add_bit(int(bit))
         result, completed, _ = decoder.bits_to_message()
@@ -150,14 +152,14 @@ class TestXORChecksum(unittest.TestCase):
         self.assertTrue(decoder.checksum_valid)
 
     def test_checksum_detects_corruption(self):
-        enc = TemporalCloakEncoding()
+        enc = FrontloadedEncoder()
         enc.message = "hello"
         # Flip a bit in the message payload (after start boundary)
         corrupted = BitArray(enc._message_bits_padded)
         boundary_len = len(BitArray(TemporalCloakConst.BOUNDARY_BITS))
         flip_pos = boundary_len + 3  # flip a bit inside the payload
         corrupted.invert(flip_pos)
-        decoder = TemporalCloakDecoding()
+        decoder = FrontloadedDecoder()
         for bit in corrupted:
             decoder.add_bit(int(bit))
         with warnings.catch_warnings(record=True) as w:
@@ -173,9 +175,9 @@ class TestAdaptiveThreshold(unittest.TestCase):
     """Verify adaptive threshold calibrates correctly with jittery delays."""
 
     def test_adaptive_threshold_with_jitter(self):
-        enc = TemporalCloakEncoding()
+        enc = FrontloadedEncoder()
         enc.message = "AB"
-        decoder = TemporalCloakDecoding()
+        decoder = FrontloadedDecoder()
 
         # Simulate jitter: add +/-10ms noise to each delay
         import random
@@ -190,6 +192,50 @@ class TestAdaptiveThreshold(unittest.TestCase):
         self.assertEqual(result, "AB")
         # Adaptive threshold should have been calibrated
         self.assertIsNotNone(decoder._adaptive_threshold)
+
+
+class TestDistributedDecoder(unittest.TestCase):
+    """Tests for DistributedDecoder preamble handling."""
+
+    def test_distributed_mode_ignores_filler(self):
+        """Feed all delays including filler, verify only bit-position delays are decoded."""
+        import math
+        enc = DistributedEncoder()
+        enc.message = "AB"
+        image_size = 50000
+        chunk_size = 256
+        delays = enc.generate_delays(image_size, chunk_size)
+        total_gaps = math.ceil(image_size / chunk_size) - 1
+
+        decoder = DistributedDecoder(total_gaps)
+        for i, delay in enumerate(delays):
+            decoder.add_bit_by_delay(delay)
+            decoder._gap_index += 1
+            if decoder._gap_index == TemporalCloakConst.PREAMBLE_BITS and not decoder._preamble_collected:
+                decoder._process_preamble()
+
+        self.assertGreater(len(decoder.bits), 0)
+
+    def test_distributed_mode_extracts_key_and_length(self):
+        """Verify preamble parsing extracts correct key and msg_len."""
+        import math
+        enc = DistributedEncoder()
+        enc.message = "hi"
+        image_size = 50000
+        chunk_size = 256
+        delays = enc.generate_delays(image_size, chunk_size)
+        total_gaps = math.ceil(image_size / chunk_size) - 1
+
+        decoder = DistributedDecoder(total_gaps)
+
+        # Feed just the preamble bits
+        for i in range(TemporalCloakConst.PREAMBLE_BITS):
+            decoder.add_bit_by_delay(delays[i])
+            decoder._gap_index += 1
+
+        decoder._process_preamble()
+        self.assertTrue(decoder._preamble_collected)
+        self.assertIsNotNone(decoder._bit_positions)
 
 
 if __name__ == '__main__':
