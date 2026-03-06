@@ -1,7 +1,7 @@
 import socket
 import time
 import random
-from temporal_cloak.encoding import TemporalCloakEncoding
+from temporal_cloak.encoding import FrontloadedEncoder
 
 
 class TemporalCloakClient:
@@ -9,7 +9,7 @@ class TemporalCloakClient:
         self._host = host
         self._port = port
         self._sock = None
-        self._cloak = TemporalCloakEncoding()
+        self._cloak = FrontloadedEncoder()
 
     @property
     def host(self) -> str:

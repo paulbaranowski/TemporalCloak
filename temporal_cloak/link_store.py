@@ -17,7 +17,8 @@ class LinkStore:
         image_filename TEXT NOT NULL,
         created_at     REAL NOT NULL,
         burn_after_reading INTEGER NOT NULL DEFAULT 0,
-        delivered      INTEGER NOT NULL DEFAULT 0
+        delivered      INTEGER NOT NULL DEFAULT 0,
+        mode           TEXT NOT NULL DEFAULT 'distributed'
     );
     """
 
@@ -28,6 +29,16 @@ class LinkStore:
         # Initialize schema on the calling thread's connection
         self._conn().execute(self.SCHEMA)
         self._conn().commit()
+        self._migrate()
+
+    def _migrate(self):
+        """Add columns that may not exist in older databases."""
+        conn = self._conn()
+        cursor = conn.execute("PRAGMA table_info(links)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if "mode" not in columns:
+            conn.execute("ALTER TABLE links ADD COLUMN mode TEXT NOT NULL DEFAULT 'distributed'")
+            conn.commit()
 
     def _conn(self):
         """Return a per-thread SQLite connection."""
@@ -39,13 +50,13 @@ class LinkStore:
         return conn
 
     def create(self, link_id, message, image_path, image_filename, created_at,
-               burn_after_reading=False):
+               burn_after_reading=False, mode="distributed"):
         self._conn().execute(
             "INSERT INTO links "
-            "(link_id, message, image_path, image_filename, created_at, burn_after_reading) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "(link_id, message, image_path, image_filename, created_at, burn_after_reading, mode) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (link_id, message, image_path, image_filename, created_at,
-             int(burn_after_reading)),
+             int(burn_after_reading), mode),
         )
         self._conn().commit()
 

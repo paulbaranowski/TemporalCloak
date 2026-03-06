@@ -1,10 +1,18 @@
 import math
+import random
 
 from bitstring import BitArray
 from temporal_cloak.const import TemporalCloakConst
 
 
 class TemporalCloakEncoding:
+    """Base encoder with shared message preparation and utility methods.
+
+    Subclasses implement _build_delays() to produce mode-specific delay lists.
+    """
+
+    BOUNDARY = TemporalCloakConst.BOUNDARY_BITS
+
     def __init__(self):
         self._message = None
         self._message_encoded = None
@@ -37,51 +45,6 @@ class TemporalCloakEncoding:
         return checksum
 
     @staticmethod
-    def bits_required(message_len: int) -> int:
-        """Return the total number of timing-delay slots needed to transmit a
-        message of *message_len* ASCII characters.
-
-        Layout: boundary (16) + payload (message_len*8) + checksum (8) + boundary (16)
-        """
-        boundary_bits = len(BitArray(TemporalCloakConst.BOUNDARY_BITS))
-        return boundary_bits * 2 + message_len * 8 + 8  # 8 = checksum
-
-    @staticmethod
-    def min_image_size(message_len: int,
-                       chunk_size: int = TemporalCloakConst.CHUNK_SIZE_TORNADO) -> int:
-        """Return the minimum image file size (bytes) required to carry a
-        message of *message_len* characters at the given chunk size.
-
-        Each chunk after the first provides one delay slot, so we need
-        (bits_required + 1) chunks total.
-        """
-        total_bits = TemporalCloakEncoding.bits_required(message_len)
-        chunks_needed = total_bits + 1  # +1 for the first chunk (no delay)
-        # ceil(size / chunk_size) >= chunks_needed when size >= (chunks_needed-1)*chunk_size + 1
-        return (chunks_needed - 1) * chunk_size + 1
-
-    @staticmethod
-    def validate_image_size(image_size: int, message_len: int,
-                            chunk_size: int = TemporalCloakConst.CHUNK_SIZE_TORNADO) -> bool:
-        """Return True if an image of *image_size* bytes can carry a message
-        of *message_len* characters."""
-        available_chunks = math.ceil(image_size / chunk_size)
-        available_slots = available_chunks - 1
-        return available_slots >= TemporalCloakEncoding.bits_required(message_len)
-
-    @staticmethod
-    def max_message_len(image_size: int,
-                        chunk_size: int = TemporalCloakConst.CHUNK_SIZE_TORNADO) -> int:
-        """Return the maximum message length (characters) an image can carry."""
-        available_chunks = math.ceil(image_size / chunk_size)
-        available_slots = available_chunks - 1
-        # available_slots >= boundary*2 + msg_len*8 + 8
-        # msg_len <= (available_slots - 40) / 8
-        boundary_bits = len(BitArray(TemporalCloakConst.BOUNDARY_BITS))
-        overhead = boundary_bits * 2 + 8  # two boundaries + checksum
-        return max(0, (available_slots - overhead) // 8)
-
-    @staticmethod
     def encode_message(msg: str):
         try:
             encoded = msg.encode('ascii')
@@ -92,7 +55,6 @@ class TemporalCloakEncoding:
         except UnicodeEncodeError:
             print(f"Failed to encode message '{msg}'")
             return False, b''
-
 
     @message.setter
     def message(self, value: str) -> None:
@@ -106,20 +68,14 @@ class TemporalCloakEncoding:
         checksum_bits = BitArray(uint=checksum, length=8)
         self._message_bits_padded = BitArray(self._message_bits)
         self._message_bits_padded.append(checksum_bits)
-        self._message_bits_padded.prepend(TemporalCloakConst.BOUNDARY_BITS)
-        self._message_bits_padded.append(TemporalCloakConst.BOUNDARY_BITS)
+        self._message_bits_padded.prepend(self.BOUNDARY)
+        self._message_bits_padded.append(self.BOUNDARY)
         print("Message bits with boundary: {}".format(self._message_bits_padded))
-        self.generate_delays()
+        self._build_delays()
 
-    def generate_delays(self) -> list:
-        for bit in self._message_bits_padded:
-            if bit:
-                delay = TemporalCloakConst.BIT_1_TIME_DELAY
-            else:
-                delay = TemporalCloakConst.BIT_0_TIME_DELAY
-            self._delays.append(delay)
-        # print(self._delays)
-        return self._delays
+    def _build_delays(self) -> None:
+        """Override in subclasses to generate mode-specific delays."""
+        pass
 
     def __str__(self):
         result = "Message: '{}'\n".format(self.message)
@@ -129,3 +85,176 @@ class TemporalCloakEncoding:
 
     def __repr__(self):
         return f"TemporalCloakEncoding(message='{self.message}')"
+
+
+class FrontloadedEncoder(TemporalCloakEncoding):
+    """Encodes messages with all bits front-loaded into the first N chunks.
+
+    After setting the message, self.delays contains one delay per bit,
+    delivered contiguously from the start of the transmission.
+    """
+
+    def _build_delays(self) -> None:
+        for bit in self._message_bits_padded:
+            if bit:
+                delay = TemporalCloakConst.BIT_1_TIME_DELAY
+            else:
+                delay = TemporalCloakConst.BIT_0_TIME_DELAY
+            self._delays.append(delay)
+
+    @staticmethod
+    def bits_required(message_len: int) -> int:
+        """Total timing-delay slots: boundary(16) + payload + checksum(8) + boundary(16)."""
+        boundary_bits = len(BitArray(TemporalCloakConst.BOUNDARY_BITS))
+        return boundary_bits * 2 + message_len * 8 + 8
+
+    @staticmethod
+    def min_image_size(message_len: int,
+                       chunk_size: int = TemporalCloakConst.CHUNK_SIZE_TORNADO) -> int:
+        """Minimum image file size (bytes) to carry *message_len* characters."""
+        total_bits = FrontloadedEncoder.bits_required(message_len)
+        chunks_needed = total_bits + 1
+        return (chunks_needed - 1) * chunk_size + 1
+
+    @staticmethod
+    def validate_image_size(image_size: int, message_len: int,
+                            chunk_size: int = TemporalCloakConst.CHUNK_SIZE_TORNADO) -> bool:
+        """Return True if image can carry the message."""
+        available_chunks = math.ceil(image_size / chunk_size)
+        available_slots = available_chunks - 1
+        return available_slots >= FrontloadedEncoder.bits_required(message_len)
+
+    @staticmethod
+    def max_message_len(image_size: int,
+                        chunk_size: int = TemporalCloakConst.CHUNK_SIZE_TORNADO) -> int:
+        """Maximum message length (characters) this image can carry."""
+        available_chunks = math.ceil(image_size / chunk_size)
+        available_slots = available_chunks - 1
+        boundary_bits = len(BitArray(TemporalCloakConst.BOUNDARY_BITS))
+        overhead = boundary_bits * 2 + 8
+        return max(0, (available_slots - overhead) // 8)
+
+    def __repr__(self):
+        return f"FrontloadedEncoder(message='{self.message}')"
+
+
+class DistributedEncoder(TemporalCloakEncoding):
+    """Encodes messages with bits scattered across all chunks via a PRNG key.
+
+    After setting the message, call generate_delays(image_size) to produce
+    the full delay list. The delay list is also stored in self.delays.
+    """
+
+    BOUNDARY = TemporalCloakConst.BOUNDARY_BITS_DISTRIBUTED
+
+    @staticmethod
+    def compute_bit_positions(key: int, total_gaps: int, num_remaining_bits: int) -> list:
+        """Deterministically select which gap positions carry message bits.
+
+        Uses the key to seed a PRNG, shuffles the available positions
+        (after the contiguous preamble), and returns the first
+        *num_remaining_bits* positions sorted in ascending order.
+        """
+        preamble = TemporalCloakConst.PREAMBLE_BITS
+        available = list(range(preamble, total_gaps))
+        rng = random.Random(key)
+        rng.shuffle(available)
+        return sorted(available[:num_remaining_bits])
+
+    def generate_delays(self, image_size: int,
+                        chunk_size: int = TemporalCloakConst.CHUNK_SIZE_TORNADO) -> list:
+        """Generate the full delay list for distributed mode.
+
+        Returns a list of length total_gaps where preamble delays occupy
+        positions 0-31 (contiguous), message/checksum/end-boundary delays
+        are placed at pseudo-random positions selected by a random key,
+        and all other positions get neutral delay (BIT_1_TIME_DELAY).
+        """
+        if self._message_encoded is None:
+            raise ValueError("Set the message property before calling generate_delays")
+
+        msg_len = len(self._message_encoded)
+        if msg_len > TemporalCloakConst.MAX_DISTRIBUTED_MSG_LEN:
+            raise ValueError(
+                f"Message too long for distributed mode "
+                f"(max {TemporalCloakConst.MAX_DISTRIBUTED_MSG_LEN} chars)")
+
+        total_gaps = math.ceil(image_size / chunk_size) - 1
+
+        # Generate random key
+        key = random.randint(0, 255)
+
+        # Build preamble bits: boundary (16) + key (8) + msg_len (8)
+        preamble_bits = BitArray(self.BOUNDARY)
+        preamble_bits.append(BitArray(uint=key, length=TemporalCloakConst.DIST_KEY_BITS))
+        preamble_bits.append(BitArray(uint=msg_len, length=TemporalCloakConst.DIST_LENGTH_BITS))
+
+        # Remaining bits: message payload + checksum + end boundary
+        remaining_data = BitArray(self._message_bits)
+        checksum = TemporalCloakEncoding.compute_checksum(self._message_encoded)
+        remaining_data.append(BitArray(uint=checksum, length=8))
+        remaining_data.append(BitArray(self.BOUNDARY))
+
+        num_remaining_bits = len(remaining_data)
+        bit_positions = DistributedEncoder.compute_bit_positions(
+            key, total_gaps, num_remaining_bits)
+
+        # Build full delay list
+        neutral_delay = TemporalCloakConst.BIT_1_TIME_DELAY
+        delays = [neutral_delay] * total_gaps
+
+        # Place preamble delays at positions 0-31
+        for i, bit in enumerate(preamble_bits):
+            delays[i] = (TemporalCloakConst.BIT_1_TIME_DELAY if bit
+                         else TemporalCloakConst.BIT_0_TIME_DELAY)
+
+        # Place remaining data at selected positions
+        data_idx = 0
+        for pos in bit_positions:
+            bit = remaining_data[data_idx]
+            delays[pos] = (TemporalCloakConst.BIT_1_TIME_DELAY if bit
+                           else TemporalCloakConst.BIT_0_TIME_DELAY)
+            data_idx += 1
+
+        self._delays = delays
+        return delays
+
+    @staticmethod
+    def bits_required(message_len: int) -> int:
+        """Total timing-delay slots including distributed preamble overhead."""
+        boundary_bits = len(BitArray(TemporalCloakConst.BOUNDARY_BITS))
+        return (boundary_bits * 2 + message_len * 8 + 8
+                + TemporalCloakConst.DIST_KEY_BITS
+                + TemporalCloakConst.DIST_LENGTH_BITS)
+
+    @staticmethod
+    def min_image_size(message_len: int,
+                       chunk_size: int = TemporalCloakConst.CHUNK_SIZE_TORNADO) -> int:
+        """Minimum image file size (bytes) to carry *message_len* characters."""
+        total_bits = DistributedEncoder.bits_required(message_len)
+        chunks_needed = total_bits + 1
+        return (chunks_needed - 1) * chunk_size + 1
+
+    @staticmethod
+    def validate_image_size(image_size: int, message_len: int,
+                            chunk_size: int = TemporalCloakConst.CHUNK_SIZE_TORNADO) -> bool:
+        """Return True if image can carry the message."""
+        available_chunks = math.ceil(image_size / chunk_size)
+        available_slots = available_chunks - 1
+        return available_slots >= DistributedEncoder.bits_required(message_len)
+
+    @staticmethod
+    def max_message_len(image_size: int,
+                        chunk_size: int = TemporalCloakConst.CHUNK_SIZE_TORNADO) -> int:
+        """Maximum message length (characters) this image can carry."""
+        available_chunks = math.ceil(image_size / chunk_size)
+        available_slots = available_chunks - 1
+        boundary_bits = len(BitArray(TemporalCloakConst.BOUNDARY_BITS))
+        overhead = (boundary_bits * 2 + 8
+                    + TemporalCloakConst.DIST_KEY_BITS
+                    + TemporalCloakConst.DIST_LENGTH_BITS)
+        max_len = max(0, (available_slots - overhead) // 8)
+        return min(max_len, TemporalCloakConst.MAX_DISTRIBUTED_MSG_LEN)
+
+    def __repr__(self):
+        return f"DistributedEncoder(message='{self.message}')"

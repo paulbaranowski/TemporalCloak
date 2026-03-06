@@ -114,5 +114,52 @@ class TestLinkStore(unittest.TestCase):
         self.assertEqual(errors, [])
 
 
+class TestLinkStoreMode(unittest.TestCase):
+    """Edge cases for the mode field in LinkStore."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.tmpdir, "test.db")
+        self.store = LinkStore(self.db_path)
+
+    def tearDown(self):
+        self.store.close()
+        if os.path.exists(self.db_path):
+            os.remove(self.db_path)
+        os.rmdir(self.tmpdir)
+
+    def _create_link(self, link_id, mode="distributed"):
+        self.store.create(
+            link_id=link_id,
+            message="test",
+            image_path="/img/test.jpg",
+            image_filename="test.jpg",
+            created_at=1000.0,
+            mode=mode,
+        )
+
+    def test_mode_frontloaded_persists(self):
+        self._create_link("link1", mode="frontloaded")
+        link = self.store.get("link1")
+        self.assertEqual(link["mode"], "frontloaded")
+
+    def test_mode_distributed_persists(self):
+        self._create_link("link2", mode="distributed")
+        link = self.store.get("link2")
+        self.assertEqual(link["mode"], "distributed")
+
+    def test_mode_default_is_distributed(self):
+        """When mode is not specified, default should be 'distributed'."""
+        self.store.create(
+            link_id="link3",
+            message="test",
+            image_path="/img/test.jpg",
+            image_filename="test.jpg",
+            created_at=1000.0,
+        )
+        link = self.store.get("link3")
+        self.assertEqual(link["mode"], "distributed")
+
+
 if __name__ == "__main__":
     unittest.main()

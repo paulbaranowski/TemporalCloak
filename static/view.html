@@ -54,6 +54,7 @@
         h1 a:hover { text-decoration: underline; }
 
         .image-display {
+            position: relative;
             text-align: center;
             margin-bottom: 24px;
             background: #111118;
@@ -71,6 +72,20 @@
             max-height: 100%;
             object-fit: contain;
             border-radius: 7px;
+        }
+
+        .scanline {
+            position: absolute;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: #00ffd5;
+            box-shadow: 0 0 6px 2px #00ffd5, 0 0 20px 4px rgba(0, 255, 213, 0.4);
+            top: 0;
+            opacity: 0;
+            pointer-events: none;
+            z-index: 2;
+            transition: none;
         }
 
         .image-display .placeholder-text {
@@ -338,6 +353,26 @@
         .checksum.valid { background: rgba(0, 255, 136, 0.1); color: #00ff88; }
         .checksum.invalid { background: rgba(255, 51, 102, 0.1); color: #ff3366; }
 
+        .decode-indicators {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+            margin-top: 8px;
+        }
+
+        .mode-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            font-weight: bold;
+            background: rgba(0, 255, 136, 0.1);
+            color: #00ff88;
+        }
+
         /* Error / loading */
         .error-page {
             text-align: center;
@@ -375,6 +410,7 @@
                 <div class="col-left">
                     <div class="image-display" id="imageDisplay">
                         <img id="linkImage" alt="Encoded image" style="display:none">
+                        <div class="scanline" id="scanline"></div>
                         <span class="placeholder-text" id="imagePlaceholder">Image will load during decode</span>
                     </div>
 
@@ -413,7 +449,10 @@
                             <span class="message-text" id="messageText"></span>
                             <span class="cursor" id="msgCursor" style="display:none"></span>
                         </div>
-                        <div id="checksumSection" style="display:none; margin-top:8px;"></div>
+                        <div class="decode-indicators">
+                            <div id="modeSection" style="display:none;"></div>
+                            <div id="checksumSection" style="display:none;"></div>
+                        </div>
                     </div>
 
                     <button id="decodeBtn" class="btn">Decode Hidden Message</button>
@@ -461,6 +500,10 @@
         const mainContent    = document.getElementById('mainContent');
         const linkImage      = document.getElementById('linkImage');
         const imagePlaceholder = document.getElementById('imagePlaceholder');
+        const scanlineEl     = document.getElementById('scanline');
+        const modeSection    = document.getElementById('modeSection');
+        let modeDetected     = false;
+        let detectedMode     = null;
         const howToggle      = document.getElementById('howToggle');
         const howContent    = document.getElementById('howContent');
         const decodeBtn     = document.getElementById('decodeBtn');
@@ -515,12 +558,48 @@
             startDecode();
         });
 
+        // Rendered image bounds within the container (for scanline positioning)
+        let imgOffsetTop = 0;
+        let imgRenderedHeight = 0;
+        let imgBoundsReady = false;
+
+        function calcImageBounds() {
+            const container = document.getElementById('imageDisplay');
+            const cW = container.clientWidth;
+            const cH = container.clientHeight;
+            const nW = linkImage.naturalWidth;
+            const nH = linkImage.naturalHeight;
+            if (!nW || !nH) return;
+            const scale = Math.min(cW / nW, cH / nH);
+            imgRenderedHeight = nH * scale;
+            imgOffsetTop = (cH - imgRenderedHeight) / 2;
+            imgBoundsReady = true;
+        }
+
+        function updateImageReveal(progress) {
+            const pct = Math.min(progress * 100, 100);
+            linkImage.style.clipPath = `inset(0 0 ${100 - pct}% 0)`;
+            if (progress > 0 && progress < 1) {
+                scanlineEl.style.opacity = '1';
+                if (imgBoundsReady) {
+                    const px = imgOffsetTop + (pct / 100) * imgRenderedHeight;
+                    scanlineEl.style.top = px + 'px';
+                } else {
+                    scanlineEl.style.top = pct + '%';
+                }
+            } else if (progress >= 1) {
+                scanlineEl.style.opacity = '0';
+                linkImage.style.clipPath = 'none';
+            }
+        }
+
         function startDecode() {
-            // Load the encoded image in parallel — the browser renders it
-            // progressively as timing-delayed chunks arrive.
+            // Pre-load the normal image, hidden behind a scanline reveal
             imagePlaceholder.style.display = 'none';
             linkImage.style.display = '';
-            linkImage.src = `/api/image/${linkId}`;
+            linkImage.style.clipPath = 'inset(0 0 100% 0)';
+            linkImage.src = `/api/image/${linkId}/normal`;
+            linkImage.onload = calcImageBounds;
 
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const ws = new WebSocket(`${protocol}//${window.location.host}/api/decode/${linkId}`);
@@ -533,7 +612,9 @@
                 const data = JSON.parse(event.data);
                 switch (data.type) {
                     case 'sync':
-                        // Timer started, first chunk received
+                        break;
+                    case 'progress':
+                        updateImageReveal(data.progress);
                         break;
                     case 'bit':
                         handleBit(data);
@@ -560,6 +641,13 @@
 
         // ── Handle each bit event ──
         function handleBit(data) {
+            if (data.progress != null) updateImageReveal(data.progress);
+            if (!modeDetected && data.mode) {
+                modeDetected = true;
+                detectedMode = data.mode;
+                modeSection.style.display = '';
+                modeSection.innerHTML = '<span class="mode-indicator">&#10003; Mode detected: ' + data.mode + '</span>';
+            }
             bitCount++;
             confidenceSum += data.confidence;
 
@@ -620,6 +708,7 @@
 
         // ── Handle completion ──
         function handleComplete(data) {
+            updateImageReveal(1);
             decodeBtn.textContent = 'Decode Complete';
             msgCursor.style.display = 'none';
 

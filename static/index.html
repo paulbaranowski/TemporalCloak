@@ -248,6 +248,75 @@
             font-size: 0.75rem;
         }
 
+        /* Options section */
+        .options-section {
+            margin-bottom: 28px;
+            border: 1px solid #222233;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .options-toggle {
+            width: 100%;
+            padding: 12px 16px;
+            background: #111118;
+            color: #888;
+            border: none;
+            font-family: inherit;
+            font-size: 0.8rem;
+            cursor: pointer;
+            text-align: left;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .options-toggle:hover { color: #aaa; }
+        .options-toggle .arrow { transition: transform 0.2s; }
+        .options-toggle.open .arrow { transform: rotate(90deg); }
+
+        .options-content {
+            display: none;
+            padding: 16px;
+            background: #0d0d14;
+        }
+
+        .options-content.open { display: block; }
+
+        .mode-selector {
+            display: flex;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .mode-btn {
+            flex: 1;
+            padding: 8px 14px;
+            background: #111118;
+            color: #888;
+            border: 1px solid #222233;
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .mode-btn:hover { border-color: #444; color: #aaa; }
+
+        .mode-btn.selected {
+            border-color: #00ffd5;
+            color: #00ffd5;
+            background: rgba(0, 255, 213, 0.05);
+        }
+
+        .mode-desc {
+            color: #555;
+            font-size: 0.75rem;
+            margin-top: 10px;
+            line-height: 1.5;
+        }
+
         @keyframes fadeIn {
             from { opacity: 0; transform: translateY(8px); }
             to { opacity: 1; transform: translateY(0); }
@@ -285,6 +354,21 @@
                 </div>
             </div>
 
+            <div class="options-section">
+                <button class="options-toggle" id="optionsToggle">
+                    Options
+                    <span class="arrow">&#9654;</span>
+                </button>
+                <div class="options-content" id="optionsContent">
+                    <label>Encoding Mode</label>
+                    <div class="mode-selector">
+                        <button class="mode-btn selected" data-mode="distributed" id="modeDistributed">Distributed</button>
+                        <button class="mode-btn" data-mode="frontloaded" id="modeFrontloaded">Frontloaded</button>
+                    </div>
+                    <p class="mode-desc" id="modeDesc">Bits are scattered across the entire image using a PRNG key. More resilient but limited to 255 characters.</p>
+                </div>
+            </div>
+
             <button id="createBtn" class="btn" disabled>Create Secret Link</button>
             <div id="errorMsg" class="error-msg" style="display:none"></div>
         </section>
@@ -314,10 +398,17 @@
         const copyBtn = document.getElementById('copyBtn');
 
         let selectedImage = null;
+        let selectedImageData = null;
+        let selectedMode = 'distributed';
         let maxMessageLen = 200;
         let allImages = [];
         let currentPage = 0;
         const PAGE_SIZE = 10;
+
+        const MODE_DESCRIPTIONS = {
+            distributed: 'Bits are scattered across the entire image using a PRNG key. More resilient but limited to 255 characters.',
+            frontloaded: 'All bits are packed into the first chunks of the image. Supports longer messages but less resilient to network jitter.',
+        };
 
         // ASCII validation
         function isAscii(str) {
@@ -388,7 +479,9 @@
                     document.querySelectorAll('.image-thumb').forEach(t => t.classList.remove('selected'));
                     thumb.classList.add('selected');
                     selectedImage = img.filename;
-                    updateMaxLen(img.max_message_len);
+                    selectedImageData = img;
+                    const key = selectedMode === 'frontloaded' ? 'max_message_len_frontloaded' : 'max_message_len_distributed';
+                    updateMaxLen(img[key]);
                 });
                 imageGrid.appendChild(thumb);
             });
@@ -417,6 +510,29 @@
             if (currentPage < totalPages - 1) { currentPage++; renderPage(); }
         });
 
+        // Options toggle
+        document.getElementById('optionsToggle').addEventListener('click', () => {
+            const toggle = document.getElementById('optionsToggle');
+            const content = document.getElementById('optionsContent');
+            toggle.classList.toggle('open');
+            content.classList.toggle('open');
+        });
+
+        // Mode selection
+        document.querySelectorAll('.mode-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('selected'));
+                btn.classList.add('selected');
+                selectedMode = btn.dataset.mode;
+                document.getElementById('modeDesc').textContent = MODE_DESCRIPTIONS[selectedMode];
+                // Recalculate max message length for current image
+                if (selectedImageData) {
+                    const key = selectedMode === 'frontloaded' ? 'max_message_len_frontloaded' : 'max_message_len_distributed';
+                    updateMaxLen(selectedImageData[key]);
+                }
+            });
+        });
+
         function showError(msg) {
             errorMsg.textContent = msg;
             errorMsg.style.display = 'block';
@@ -439,6 +555,7 @@
                     body: JSON.stringify({
                         message: messageInput.value.trim(),
                         image: selectedImage,
+                        mode: selectedMode,
                     }),
                 });
                 const data = await resp.json();
