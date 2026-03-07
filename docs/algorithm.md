@@ -119,7 +119,7 @@ The receiver knows `total_gaps` before decoding begins because the server includ
 
 A larger image means more gaps, which means more candidate positions to scatter bits across. This has two effects:
 
-- **Better stealth**: with more filler gaps between message bits, the timing pattern becomes sparser and harder to detect. A 100 KB image (~390 gaps) hiding a 5-char message uses only ~72 of 358 candidate positions (~20%), while a 500 KB image (~1953 gaps) uses the same 72 bits across 1921 candidates (~4%).
+- **Better stealth**: with more filler gaps between message bits, the timing pattern becomes sparser and harder to detect. A 100 KB image (~390 gaps) hiding a 5-char message uses only ~64 of 358 candidate positions (~18%), while a 500 KB image (~1953 gaps) uses the same 64 bits across 1921 candidates (~3%).
 - **Same capacity ceiling**: the maximum message length is capped at 255 characters regardless of image size, since the length field is only 8 bits. A bigger image doesn't let you encode longer messages — it just hides them better.
 
 If the image is too small to provide enough gaps for the message plus overhead, the encoder rejects it (validated by `DistributedEncoder.validate_image_size()`).
@@ -141,7 +141,7 @@ Total encoded bits: 32 preamble (contiguous) + 40 scattered = 72
 
 M = 2×8 + 8 + 16 = 40 bits to scatter (after the preamble)
     │ │   │   │
-    │ │   │   └── end boundary (0xFF00 terminator, 16 bits)
+    │ │   │   └── end boundary (0xFF01 terminator, 16 bits)
     │ │   └────── checksum (1 byte for integrity check)
     │ └────────── 8 bits per ASCII character
     └──────────── 2 characters in "Hi"
@@ -171,7 +171,7 @@ Gap:  0                             31  32                      79
 
 Because the key is only 8 bits, both encoder and decoder share a small search space (256 possible shuffles). But the key isn't meant for cryptographic secrecy — it just spreads the bits out. The security of the covert channel rests on the observer not knowing that timing steganography is being used at all.
 
-**Filler gaps**: all gaps that don't carry a real bit use zero delay, which is indistinguishable from a `1` bit on the wire. This means an observer sees delays scattered throughout the entire transmission rather than clustered at the start.
+**Filler gaps**: all gaps that don't carry a real bit use zero added delay. With the default localhost settings (where `BIT_1_DELAY` is also zero), filler is indistinguishable from a `1` bit on the wire. On internet deployments where `BIT_1_DELAY` is non-zero, filler gaps are slightly faster than real `1` bits, but both are still much shorter than `0` bits. This means an observer sees short delays scattered throughout the entire transmission rather than clustered at the start.
 
 **Maximum message length**: capped at 255 characters (the 8-bit length field in the preamble).
 
