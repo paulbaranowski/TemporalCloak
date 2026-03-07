@@ -88,21 +88,21 @@ Message bits are **scattered pseudo-randomly** across all available chunk gaps, 
 **Preamble** (32 bits, contiguous at positions 0–31):
 
 ```
-┌──────────────┬──────────┬──────────────┐
-│  Boundary    │  Key     │  Msg Length   │
-│  0xFF01      │  8-bit   │  8-bit        │
-│  (16 bits)   │  random  │  (chars)      │
-└──────────────┴──────────┴──────────────┘
+┌──────────────┬──────────┬─────────────┐
+│  Boundary    │  Key     │  Msg Length  │
+│  0xFF01      │  8-bit   │  8-bit       │
+│  (16 bits)   │  random  │  (chars)     │
+└──────────────┴──────────┴─────────────┘
 ```
 
 **Scattered data** (placed at PRNG-selected positions after the preamble):
 
 ```
-┌───────────────────┬──────────┬──────────────┐
-│  Payload          │ Checksum │  Boundary     │
-│  ASCII message    │  8-bit   │  0xFF01       │
-│  (N × 8 bits)     │  XOR     │  (16 bits)    │
-└───────────────────┴──────────┴──────────────┘
+┌───────────────────┬──────────┬─────────────┐
+│  Payload          │ Checksum │  Boundary    │
+│  ASCII message    │  8-bit   │  0xFF01      │
+│  (N × 8 bits)     │  XOR     │  (16 bits)   │
+└───────────────────┴──────────┴─────────────┘
 ```
 
 **Bit position selection**:
@@ -140,11 +140,11 @@ Here's a concrete example encoding a 2-character message (`"Hi"`) into an image 
 Total encoded bits: 32 preamble (contiguous) + 40 scattered = 72
 
 M = 2×8 + 8 + 16 = 40 bits to scatter (after the preamble)
-    │ │    │    │
-    │ │    │    └─ end boundary (0xFF00 terminator, 16 bits)
-    │ │    └────── checksum (1 byte for integrity check)
-    │ └─────────── 8 bits per ASCII character
-    └───────────── 2 characters in "Hi"
+    │ │   │   │
+    │ │   │   └── end boundary (0xFF00 terminator, 16 bits)
+    │ │   └────── checksum (1 byte for integrity check)
+    │ └────────── 8 bits per ASCII character
+    └──────────── 2 characters in "Hi"
 
 Candidates: [32, 33, 34, 35, 36, 37, ... 79]   (48 positions)
 
@@ -158,11 +158,11 @@ Take first 40, then sort:
 The resulting gap layout looks like this:
 
 ```
-Gap:  0              31 32                                    79
-      ├───────────────┤  ├─────────────────────────────────────┤
-      PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP··M·M··M·M·M··M··M·M····M
-      ├─── boundary ──┤├key┤├len┤     ↑                       ↑
-      (16 bits)        (8)  (8)       scattered data bits    last candidate
+Gap:  0                             31  32                      79
+      ├──────────────────────────────┤  ├────────────────────────┤
+      PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP  ··M·M··M·M·M··M··M·M····M
+      ├── boundary ──┤├─key──┤├─len──┤    ↑                      ↑
+         (16 bits)     (8)    (8)         scattered data bits  last candidate
 
       P = preamble bit (contiguous, always positions 0–31)
       M = message/checksum/end-boundary bit (PRNG-selected)
@@ -191,14 +191,14 @@ It then instantiates the appropriate decoder and replays the collected delays.
 The client sends **one random byte per bit**, with the delay between sends encoding the message. The server receives bytes one at a time and measures inter-arrival times. Uses frontloaded encoding.
 
 ```
-Client                          Server
-  │                               │
-  ├─── random byte ───────────────►│  (sync byte, discarded)
-  │     sleep(delay[0])           │
-  ├─── random byte ───────────────►│  mark_time() → bit 0
-  │     sleep(delay[1])           │
-  ├─── random byte ───────────────►│  mark_time() → bit 1
-  │     ...                       │  ...
+Client                              Server
+  │                                   │
+  ├─── random byte ───────────────────►│  (sync byte, discarded)
+  │     sleep(delay[0])               │
+  ├─── random byte ───────────────────►│  mark_time() → bit 0
+  │     sleep(delay[1])               │
+  ├─── random byte ───────────────────►│  mark_time() → bit 1
+  │     ...                           │  ...
 ```
 
 ### Demo 2: HTTP Chunked Image Transfer
@@ -245,11 +245,21 @@ where 56 = two 16-bit boundaries + 8-bit checksum + 8-bit key + 8-bit length. Al
 
 ## Throughput
 
-Throughput depends on the delay values. On localhost with defaults (0.00s for `1`, 0.10s for `0`):
+Throughput depends on two factors per bit: the encoding delay (`D`) and the baseline chunk transfer time (`T`). The actual time per bit is `T + D`, where:
 
-- **Best case** (all 1s): effectively instant
-- **Worst case** (all 0s): 0.10s per bit = 1.25 bytes/second
-- **Average** (50/50 mix): ~0.05s per bit = 2.5 bytes/second
+- `T` = time to transfer one chunk (network-dependent, independent of encoding)
+- `D` = added delay for encoding (`0.00s` for a `1` bit, `0.10s` for a `0` bit with defaults)
+
+| Environment | `T` (approx) | Notes |
+|-------------|--------------|-------|
+| localhost   | ~0.001s      | Negligible compared to `D` |
+| Production  | ~0.02s       | Hostinger VPS, varies with client distance |
+
+With default delay values:
+
+- **Best case** (all 1s): `T` per bit (~0.001s localhost, ~0.02s production)
+- **Worst case** (all 0s): `T + 0.10s` per bit ≈ 1.25 bytes/second
+- **Average** (50/50 mix): `T + ~0.05s` per bit ≈ 2.5 bytes/second
 
 This is intentionally slow — covert channels trade bandwidth for stealth.
 
