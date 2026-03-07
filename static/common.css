@@ -1,0 +1,97 @@
+/* ── Color palette ── */
+:root {
+    --bg: #0a0a0f;
+    --bg-card: #111118;
+    --bg-inset: #0d0d14;
+    --border: #222233;
+    --text: #c0c0c0;
+    --text-secondary: #b0b0b0;
+    --text-muted: #888;
+    --text-dim: #666;
+    --accent: #00ffd5;
+    --accent-green: #00ff88;
+    --accent-orange: #ff8800;
+    --accent-red: #ff3366;
+    --font: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+}
+
+/* ── Reset ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ── Base ── */
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    min-height: 100vh;
+    line-height: 1.6;
+}
+
+/* ── Utility classes ── */
+.code { color: var(--accent); }
+.green { color: var(--accent-green); }
+.orange { color: var(--accent-orange); }
+
+/* ── Primary button ── */
+.btn {
+    display: block;
+    width: 100%;
+    padding: 14px;
+    background: linear-gradient(135deg, #00ffd5 0%, #00cc99 100%);
+    color: var(--bg);
+    border: none;
+    border-radius: 6px;
+    font-family: var(--font);
+    font-size: 0.95rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+    cursor: pointer;
+    transition: opacity 0.2s, transform 0.1s;
+}
+
+.btn:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 16px rgba(0, 255, 213, 0.3);
+}
+
+.btn:disabled { opacity: 0.65; cursor: not-allowed; }
+
+/* ── Delay diagram (shared by explainer + view) ── */
+.delay-diagram {
+    display: flex;
+    align-items: flex-end;
+    gap: 4px;
+    margin: 12px 0;
+    padding: 12px;
+    background: var(--bg);
+    border-radius: 4px;
+    height: 70px;
+}
+
+.delay-bar {
+    width: 18px;
+    border-radius: 2px 2px 0 0;
+    text-align: center;
+    font-size: 0.65rem;
+    color: var(--bg);
+    font-weight: bold;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding-bottom: 2px;
+}
+
+.delay-label {
+    font-size: 0.7rem;
+    margin-left: 12px;
+    color: var(--text-dim);
+    align-self: center;
+}
+
+/* ── Animation ── */
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.fade-in { animation: fadeIn 0.3s ease-out; }

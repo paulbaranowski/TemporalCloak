@@ -8,17 +8,8 @@
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
     <link rel="shortcut icon" href="/favicon.ico">
+    <link rel="stylesheet" href="/common.css">
     <style>
-        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-        body {
-            background: #0a0a0f;
-            color: #c0c0c0;
-            font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
-            min-height: 100vh;
-            line-height: 1.6;
-        }
-
         .container {
             max-width: 1100px;
             margin: 0 auto;
@@ -45,7 +36,7 @@
 
         h1 {
             font-size: 1.5rem;
-            color: #00ffd5;
+            color: var(--accent);
             text-shadow: 0 0 20px rgba(0, 255, 213, 0.3);
             letter-spacing: 2px;
         }
@@ -57,8 +48,8 @@
             position: relative;
             text-align: center;
             margin-bottom: 24px;
-            background: #111118;
-            border: 1px solid #222233;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
             border-radius: 8px;
             aspect-ratio: 4 / 3;
             display: flex;
@@ -79,8 +70,8 @@
             left: 0;
             right: 0;
             height: 2px;
-            background: #00ffd5;
-            box-shadow: 0 0 6px 2px #00ffd5, 0 0 20px 4px rgba(0, 255, 213, 0.4);
+            background: var(--accent);
+            box-shadow: 0 0 6px 2px var(--accent), 0 0 20px 4px rgba(0, 255, 213, 0.4);
             top: 0;
             opacity: 0;
             pointer-events: none;
@@ -97,14 +88,14 @@
         .cta-banner {
             margin-top: 24px;
             padding: 16px 20px;
-            background: #111118;
-            border: 1px solid #222233;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
             border-radius: 8px;
             text-align: center;
         }
 
         .cta-banner p {
-            color: #888;
+            color: var(--text-secondary);
             font-size: 0.85rem;
             margin-bottom: 10px;
         }
@@ -113,7 +104,7 @@
             display: inline-block;
             padding: 8px 20px;
             background: linear-gradient(135deg, #00ffd5 0%, #00cc99 100%);
-            color: #0a0a0f;
+            color: var(--bg);
             text-decoration: none;
             border-radius: 5px;
             font-size: 0.85rem;
@@ -131,7 +122,7 @@
         .how-it-works {
             margin-top: 16px;
             margin-bottom: 28px;
-            border: 1px solid #222233;
+            border: 1px solid var(--border);
             border-radius: 8px;
             overflow: hidden;
         }
@@ -139,8 +130,8 @@
         .how-toggle {
             width: 100%;
             padding: 12px 16px;
-            background: #111118;
-            color: #888;
+            background: var(--bg-card);
+            color: var(--text-muted);
             border: none;
             font-family: inherit;
             font-size: 0.8rem;
@@ -158,70 +149,13 @@
         .how-content {
             display: none;
             padding: 16px;
-            background: #0d0d14;
+            background: var(--bg-inset);
             font-size: 0.8rem;
-            color: #777;
+            color: var(--text-secondary);
             line-height: 1.8;
         }
 
         .how-content.open { display: block; }
-
-        .delay-diagram {
-            display: flex;
-            align-items: flex-end;
-            gap: 4px;
-            margin: 12px 0;
-            padding: 12px;
-            background: #0a0a0f;
-            border-radius: 4px;
-            height: 70px;
-        }
-
-        .delay-bar {
-            width: 18px;
-            border-radius: 2px 2px 0 0;
-            text-align: center;
-            font-size: 0.65rem;
-            color: #0a0a0f;
-            font-weight: bold;
-            display: flex;
-            align-items: flex-end;
-            justify-content: center;
-            padding-bottom: 2px;
-        }
-
-        .delay-label {
-            font-size: 0.7rem;
-            margin-left: 12px;
-            color: #666;
-            align-self: center;
-        }
-
-        .code { color: #00ffd5; }
-
-        /* Decode button */
-        .btn {
-            display: block;
-            width: 100%;
-            padding: 14px;
-            background: linear-gradient(135deg, #00ffd5 0%, #00cc99 100%);
-            color: #0a0a0f;
-            border: none;
-            border-radius: 6px;
-            font-family: inherit;
-            font-size: 0.95rem;
-            font-weight: 700;
-            letter-spacing: 1px;
-            cursor: pointer;
-            transition: opacity 0.2s, transform 0.1s;
-        }
-
-        .btn:hover:not(:disabled) {
-            transform: translateY(-1px);
-            box-shadow: 0 4px 16px rgba(0, 255, 213, 0.3);
-        }
-
-        .btn:disabled { opacity: 0.3; cursor: not-allowed; }
 
         /* Visualization */
         .viz { margin-top: 24px; }
@@ -232,7 +166,7 @@
 
         .viz-label {
             font-size: 0.7rem;
-            color: #555;
+            color: var(--text-dim);
             text-transform: uppercase;
             letter-spacing: 1px;
             margin-bottom: 6px;
@@ -244,20 +178,20 @@
             gap: 24px;
             flex-wrap: wrap;
             padding: 10px 16px;
-            background: #111118;
-            border: 1px solid #222233;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
             border-radius: 6px;
             font-size: 0.75rem;
             margin-bottom: 20px;
         }
 
-        .stat-item { color: #666; }
-        .stat-value { color: #00ffd5; }
+        .stat-item { color: var(--text-muted); }
+        .stat-value { color: var(--accent); }
 
         /* Timing bars */
         .timing-bars-container {
-            background: #111118;
-            border: 1px solid #222233;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
             border-radius: 6px;
             padding: 12px;
             overflow-x: auto;
@@ -277,14 +211,14 @@
             transition: height 0.1s;
         }
 
-        .t-bar.bit1 { background: #00ff88; }
-        .t-bar.bit0 { background: #ff8800; }
+        .t-bar.bit1 { background: var(--accent-green); }
+        .t-bar.bit0 { background: var(--accent-orange); }
         .t-bar.boundary { opacity: 0.3; }
 
         /* Bit stream */
         .bit-stream {
-            background: #111118;
-            border: 1px solid #222233;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
             border-radius: 6px;
             padding: 12px;
             font-size: 0.8rem;
@@ -296,21 +230,21 @@
         }
 
         .bit-char { font-weight: bold; }
-        .bit-char.b1 { color: #00ff88; }
-        .bit-char.b0 { color: #ff8800; }
+        .bit-char.b1 { color: var(--accent-green); }
+        .bit-char.b0 { color: var(--accent-orange); }
         .bit-char.low-conf { color: #ffcc00; }
         .bit-char.boundary { opacity: 0.3; }
         .bit-space { display: inline-block; width: 6px; }
 
         /* Message reveal */
         .message-reveal {
-            background: #111118;
-            border: 1px solid #222233;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
             border-radius: 6px;
             padding: 20px;
             min-height: 60px;
             font-size: 1.3rem;
-            color: #00ff88;
+            color: var(--accent-green);
             text-shadow: 0 0 8px rgba(0, 255, 136, 0.2);
             display: flex;
             align-items: center;
@@ -322,7 +256,7 @@
             display: inline-block;
             width: 2px;
             height: 1.3em;
-            background: #00ffd5;
+            background: var(--accent);
             margin-left: 2px;
             animation: blink 0.8s step-end infinite;
             vertical-align: text-bottom;
@@ -350,8 +284,8 @@
             font-weight: bold;
         }
 
-        .checksum.valid { background: rgba(0, 255, 136, 0.1); color: #00ff88; }
-        .checksum.invalid { background: rgba(255, 51, 102, 0.1); color: #ff3366; }
+        .checksum.valid { background: rgba(0, 255, 136, 0.1); color: var(--accent-green); }
+        .checksum.invalid { background: rgba(255, 51, 102, 0.1); color: var(--accent-red); }
 
         .decode-indicators {
             display: flex;
@@ -370,29 +304,23 @@
             font-size: 0.85rem;
             font-weight: bold;
             background: rgba(0, 255, 136, 0.1);
-            color: #00ff88;
+            color: var(--accent-green);
         }
 
         /* Error / loading */
         .error-page {
             text-align: center;
             padding: 80px 20px;
-            color: #ff3366;
+            color: var(--accent-red);
         }
 
         .loading-text {
             text-align: center;
-            color: #444;
+            color: var(--text-dim);
             padding: 40px;
             font-size: 0.85rem;
         }
 
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(8px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        .fade-in { animation: fadeIn 0.3s ease-out; }
     </style>
 </head>
 <body>
@@ -420,25 +348,10 @@
                     </div>
 
                     <div class="how-it-works">
-                        <button class="how-toggle" id="howToggle">
+                        <a href="/explainer.html" target="_blank" class="how-toggle" style="text-decoration:none;color:inherit;">
                             How does TemporalCloak work?
                             <span class="arrow">&#9654;</span>
-                        </button>
-                        <div class="how-content" id="howContent">
-                            <p>TemporalCloak hides messages in the <strong style="color:#00ffd5">timing delays</strong> between data chunks &mdash; not in the data itself. The image you see is completely normal. The secret is in <em>when</em> each piece arrives.</p>
-                            <div class="delay-diagram">
-                                <div class="delay-bar bit1" style="height:14px;background:#00ff88;">1</div>
-                                <div class="delay-bar bit1" style="height:14px;background:#00ff88;">1</div>
-                                <div class="delay-bar bit0" style="height:46px;background:#ff8800;">0</div>
-                                <div class="delay-bar bit1" style="height:14px;background:#00ff88;">1</div>
-                                <div class="delay-bar bit0" style="height:46px;background:#ff8800;">0</div>
-                                <div class="delay-bar bit0" style="height:46px;background:#ff8800;">0</div>
-                                <div class="delay-bar bit1" style="height:14px;background:#00ff88;">1</div>
-                                <div class="delay-bar bit1" style="height:14px;background:#00ff88;">1</div>
-                                <div class="delay-label">&larr; short delay = <span class="code">1</span>, long delay = <span class="code">0</span></div>
-                            </div>
-                            <p>Each bit is encoded as a time gap: a <strong style="color:#00ff88">short delay</strong> means binary 1, a <strong style="color:#ff8800">longer delay</strong> means binary 0. A boundary marker (<span class="code">0xFF00</span>) frames the message. An 8-bit XOR checksum verifies integrity.</p>
-                        </div>
+                        </a>
                     </div>
                 </div>
 
@@ -507,8 +420,6 @@
         const modeSection    = document.getElementById('modeSection');
         let modeDetected     = false;
         let detectedMode     = null;
-        const howToggle      = document.getElementById('howToggle');
-        const howContent    = document.getElementById('howContent');
         const decodeBtn     = document.getElementById('decodeBtn');
         const vizEl         = document.getElementById('viz');
         const timingBars    = document.getElementById('timingBars');
@@ -521,12 +432,6 @@
         const statThreshold = document.getElementById('statThreshold');
         const statConf      = document.getElementById('statConf');
         const statBps       = document.getElementById('statBps');
-
-        // ── How it works toggle ──
-        howToggle.addEventListener('click', () => {
-            howToggle.classList.toggle('open');
-            howContent.classList.toggle('open');
-        });
 
         // ── Initialization ──
         async function init() {

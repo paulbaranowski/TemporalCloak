@@ -8,17 +8,8 @@
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
     <link rel="shortcut icon" href="/favicon.ico">
+    <link rel="stylesheet" href="/common.css">
     <style>
-        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-        body {
-            background: #0a0a0f;
-            color: #c0c0c0;
-            font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
-            min-height: 100vh;
-            line-height: 1.6;
-        }
-
         .container {
             max-width: 860px;
             margin: 0 auto;
@@ -29,7 +20,7 @@
 
         h1 {
             font-size: 1.5rem;
-            color: #00ffd5;
+            color: var(--accent);
             text-shadow: 0 0 20px rgba(0, 255, 213, 0.3);
             letter-spacing: 2px;
         }
@@ -54,45 +45,86 @@
             max-width: 640px;
             margin: 0 auto;
             padding: 20px 24px;
-            background: #111118;
-            border: 1px solid #222233;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
             border-radius: 8px;
-            color: #999;
+            color: var(--text-secondary);
             font-size: 0.9rem;
             line-height: 1.8;
         }
 
-        .hero-summary .hl { color: #00ffd5; }
+        .hero-summary .hl { color: var(--accent); }
 
         /* Section cards */
         .card {
-            background: #111118;
-            border: 1px solid #222233;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
             border-radius: 8px;
             padding: 24px;
             margin-bottom: 24px;
         }
 
         .card h3 {
-            color: #00ff88;
-            font-size: 0.85rem;
+            color: var(--accent-green);
+            font-size: 0.95rem;
             text-transform: uppercase;
             letter-spacing: 1px;
             margin-bottom: 12px;
         }
 
         .card p {
-            font-size: 0.85rem;
-            color: #999;
+            font-size: 0.95rem;
+            color: var(--text-secondary);
             line-height: 1.8;
             margin-bottom: 10px;
         }
 
         .card p:last-child { margin-bottom: 0; }
 
-        .code { color: #00ffd5; }
-        .green { color: #00ff88; }
-        .orange { color: #ff8800; }
+        /* Collapsible deep dive */
+        .deep-dive {
+            margin-top: 12px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        .deep-dive summary {
+            padding: 10px 16px;
+            background: var(--bg);
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            cursor: pointer;
+            list-style: none;
+        }
+
+        .deep-dive summary::-webkit-details-marker { display: none; }
+
+        .deep-dive summary::before {
+            content: '\25B8';
+            display: inline-block;
+            margin-right: 8px;
+            transition: transform 0.2s;
+            color: var(--accent);
+        }
+
+        .deep-dive[open] summary::before {
+            transform: rotate(90deg);
+        }
+
+        .deep-dive-content {
+            padding: 16px;
+            background: var(--bg);
+        }
+
+        .deep-dive-content p {
+            font-size: 0.95rem;
+            color: var(--text-secondary);
+            line-height: 1.8;
+            margin-bottom: 6px;
+        }
+
+        .deep-dive-content p:last-child { margin-bottom: 0; }
 
         /* Step number badges */
         .step-num {
@@ -101,8 +133,8 @@
             height: 24px;
             line-height: 24px;
             text-align: center;
-            background: #00ffd5;
-            color: #0a0a0f;
+            background: var(--accent);
+            color: var(--bg);
             border-radius: 50%;
             font-size: 0.7rem;
             font-weight: 700;
@@ -112,8 +144,8 @@
 
         /* Animation container */
         .anim-card {
-            background: #111118;
-            border: 1px solid #222233;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
             border-radius: 8px;
             padding: 24px;
             margin-bottom: 48px;
@@ -121,8 +153,8 @@
         }
 
         .anim-card h3 {
-            color: #00ff88;
-            font-size: 0.85rem;
+            color: var(--accent-green);
+            font-size: 0.95rem;
             text-transform: uppercase;
             letter-spacing: 1px;
             margin-bottom: 16px;
@@ -186,7 +218,7 @@
             font-size: 0.6rem;
             padding: 1px 6px;
             border-radius: 3px;
-            color: #0a0a0f;
+            color: var(--bg);
             font-weight: 700;
             white-space: nowrap;
         }
@@ -210,7 +242,7 @@
         }
 
         .anim-panel {
-            background: #0a0a0f;
+            background: var(--bg);
             border: 1px solid #1a1a2a;
             border-radius: 6px;
             padding: 12px 16px;
@@ -231,7 +263,7 @@
         .sender-text {
             text-align: center;
             font-size: 1rem;
-            color: #00ffd5;
+            color: var(--accent);
             margin-bottom: 6px;
             min-height: 1.4em;
         }
@@ -257,12 +289,12 @@
         }
 
         .sender-bits .sbit.active-1 {
-            color: #00ff88;
+            color: var(--accent-green);
             background: rgba(0, 255, 136, 0.1);
         }
 
         .sender-bits .sbit.active-0 {
-            color: #ff8800;
+            color: var(--accent-orange);
             background: rgba(255, 136, 0, 0.1);
         }
 
@@ -295,12 +327,12 @@
         }
 
         .recv-bits .rbit.recv-1 {
-            color: #00ff88;
+            color: var(--accent-green);
             background: rgba(0, 255, 136, 0.1);
         }
 
         .recv-bits .rbit.recv-0 {
-            color: #ff8800;
+            color: var(--accent-orange);
             background: rgba(255, 136, 0, 0.1);
         }
 
@@ -311,7 +343,7 @@
         .recv-text {
             text-align: center;
             font-size: 1rem;
-            color: #00ff88;
+            color: var(--accent-green);
             margin-top: 6px;
             min-height: 1.4em;
             text-shadow: 0 0 8px rgba(0, 255, 136, 0.2);
@@ -324,8 +356,8 @@
 
         .replay-btn {
             padding: 6px 18px;
-            background: #222233;
-            color: #00ffd5;
+            background: var(--border);
+            color: var(--accent);
             border: 1px solid #333;
             border-radius: 4px;
             font-family: inherit;
@@ -339,23 +371,23 @@
 
         /* Highlight card (Not Just for the Web) */
         .highlight-card {
-            background: #111118;
-            border: 1px solid #00ffd5;
+            background: var(--bg-card);
+            border: 1px solid var(--accent);
             border-radius: 8px;
             padding: 24px;
             margin-bottom: 24px;
         }
 
         .highlight-card h3 {
-            color: #00ffd5;
+            color: var(--accent);
             font-size: 0.95rem;
             letter-spacing: 1px;
             margin-bottom: 12px;
         }
 
         .highlight-card p {
-            font-size: 0.85rem;
-            color: #999;
+            font-size: 0.95rem;
+            color: var(--text-secondary);
             line-height: 1.8;
             margin-bottom: 10px;
         }
@@ -369,8 +401,8 @@
         }
 
         .highlight-card li {
-            font-size: 0.85rem;
-            color: #999;
+            font-size: 0.95rem;
+            color: var(--text-secondary);
             padding: 4px 0;
             padding-left: 20px;
             position: relative;
@@ -378,41 +410,9 @@
 
         .highlight-card li::before {
             content: '\25B8';
-            color: #00ffd5;
+            color: var(--accent);
             position: absolute;
             left: 0;
-        }
-
-        /* Delay diagram inline */
-        .delay-diagram {
-            display: flex;
-            align-items: flex-end;
-            gap: 4px;
-            margin: 12px 0;
-            padding: 12px;
-            background: #0a0a0f;
-            border-radius: 4px;
-            height: 70px;
-        }
-
-        .delay-bar {
-            width: 18px;
-            border-radius: 2px 2px 0 0;
-            text-align: center;
-            font-size: 0.65rem;
-            color: #0a0a0f;
-            font-weight: bold;
-            display: flex;
-            align-items: flex-end;
-            justify-content: center;
-            padding-bottom: 2px;
-        }
-
-        .delay-label {
-            font-size: 0.7rem;
-            margin-left: 12px;
-            color: #666;
-            align-self: center;
         }
 
         /* CTA */
@@ -426,7 +426,7 @@
             display: inline-block;
             padding: 14px 36px;
             background: linear-gradient(135deg, #00ffd5 0%, #00cc99 100%);
-            color: #0a0a0f;
+            color: var(--bg);
             text-decoration: none;
             border-radius: 6px;
             font-family: inherit;
@@ -449,12 +449,6 @@
             .chunk-indicator { display: none !important; }
         }
 
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(8px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        .fade-in { animation: fadeIn 0.3s ease-out; }
     </style>
 </head>
 <body>
@@ -505,7 +499,7 @@
         <div class="card">
             <h3><span class="step-num">1</span> Message to Bits</h3>
             <p>Each character is converted to its 8-bit ASCII value. For example, <span class="code">"H"</span> becomes <span class="code">01001000</span> and <span class="code">"i"</span> becomes <span class="code">01101001</span>.</p>
-            <p>A 16-bit boundary marker (<span class="code">0xFF00</span>) is prepended and appended to frame the message. An 8-bit XOR checksum is appended after the payload for integrity verification.</p>
+            <p>A 16-bit boundary marker (<span class="code">0xFF00</span> in front-loaded mode) is prepended and appended to frame the message. An 8-bit XOR checksum is appended after the payload for integrity verification.</p>
         </div>
 
         <!-- Step 2: Bits to Timing -->
@@ -513,14 +507,14 @@
             <h3><span class="step-num">2</span> Bits to Timing Delays</h3>
             <p>Each bit maps to a time delay between consecutive data chunks:</p>
             <div class="delay-diagram">
-                <div class="delay-bar" style="height:14px;background:#00ff88;">1</div>
-                <div class="delay-bar" style="height:14px;background:#00ff88;">1</div>
+                <div class="delay-bar" style="height:22px;background:#00ff88;">1</div>
+                <div class="delay-bar" style="height:22px;background:#00ff88;">1</div>
                 <div class="delay-bar" style="height:46px;background:#ff8800;">0</div>
-                <div class="delay-bar" style="height:14px;background:#00ff88;">1</div>
+                <div class="delay-bar" style="height:22px;background:#00ff88;">1</div>
                 <div class="delay-bar" style="height:46px;background:#ff8800;">0</div>
                 <div class="delay-bar" style="height:46px;background:#ff8800;">0</div>
-                <div class="delay-bar" style="height:14px;background:#00ff88;">1</div>
-                <div class="delay-bar" style="height:14px;background:#00ff88;">1</div>
+                <div class="delay-bar" style="height:22px;background:#00ff88;">1</div>
+                <div class="delay-bar" style="height:22px;background:#00ff88;">1</div>
                 <div class="delay-label">&larr; <span class="green">short = 1</span> (~50ms), <span class="orange">long = 0</span> (~300ms)</div>
             </div>
             <p>A <span class="green">short delay (~50ms)</span> encodes a binary <span class="green">1</span>. A <span class="orange">longer delay (~300ms)</span> encodes a binary <span class="orange">0</span>. The threshold between them is ~175ms.</p>
@@ -540,6 +534,15 @@
             <p>Once the closing boundary marker (<span class="code">0xFF00</span>) is detected, the accumulated bits are grouped into 8-bit bytes and converted back to ASCII characters. The XOR checksum is verified to ensure message integrity.</p>
         </div>
 
+        <!-- Going Further: Distributed Mode -->
+        <div class="highlight-card">
+            <h3>Going Further: Distributed Mode</h3>
+            <p>The encoding described above is called <strong>front-loaded mode</strong> &mdash; all the message bits are packed into the first N chunk gaps. This works, but it creates an obvious pattern: a burst of short and long delays at the start, followed by uniform gaps for the rest of the image. An observer watching the traffic could notice this.</p>
+            <p><strong>Distributed mode</strong> solves this by scattering message bits across the <em>entire</em> image transmission. A short preamble (32 bits) at the start contains a boundary marker, a random key, and the message length. The key seeds a PRNG that determines which chunk gaps carry real message bits &mdash; all other gaps use a neutral delay that blends in naturally.</p>
+            <p>The result: to an observer, the timing pattern looks much more uniform. The message bits are hidden among hundreds of neutral-delay gaps, making the encoding significantly harder to detect. The receiver uses the same key to know exactly which gaps to read.</p>
+            <p>The two modes use slightly different boundary markers (<span class="code">0xFF00</span> for front-loaded, <span class="code">0xFF01</span> for distributed), so the decoder automatically detects which mode was used &mdash; no configuration needed.</p>
+        </div>
+
         <!-- Not Just for the Web -->
         <div class="highlight-card">
             <h3>Not Just for the Web</h3>
@@ -554,16 +557,19 @@
 
         <!-- Why Server-Side Decoding -->
         <div class="card">
-            <h3><span class="step-num">5</span> Why the Web Decoder Runs Server-Side</h3>
-            <p>You might wonder: if the browser receives the image chunks, why can't it decode the hidden message directly? The answer lies in how browsers handle HTTP.</p>
-            <p>The timing delays exist between HTTP chunks sent by the server, but the browser's <span class="code">fetch()</span> API doesn't expose precise inter-chunk timing to JavaScript. Browsers buffer network data internally, so by the time your code sees a chunk, the original timing information is lost.</p>
-            <p>Here's how the web demo works instead:</p>
-            <p><span class="green">1.</span> The browser opens a <span class="code">WebSocket</span> to the server when you click "Decode".<br>
-               <span class="green">2.</span> The server fetches the image from its own endpoint, measuring the real timing delays between chunks as they arrive.<br>
-               <span class="green">3.</span> The server runs the decoding logic &mdash; classifying each delay as a <span class="green">1</span> or <span class="orange">0</span>, finding boundaries, assembling characters.<br>
-               <span class="green">4.</span> Decode results stream back to the browser over the WebSocket in real time: each bit, the partial message, confidence scores.<br>
-               <span class="green">5.</span> The browser is purely a visualization layer &mdash; it renders the bits and characters as they arrive, but does no decoding itself.</p>
-            <p>This is a deliberate architectural choice. In the CLI demo (raw TCP sockets), the receiver decodes directly because it controls the socket and can measure precise inter-packet timing. In the web demo, the server plays both roles &mdash; sender <em>and</em> proxy receiver &mdash; because browsers can't measure chunk-level timing accurately enough for steganographic decoding.</p>
+            <h3><span class="step-num">5</span> This Is a Demo</h3>
+            <p>This web app is a demonstration of the concept &mdash; not how you'd actually send a covert message. In a real scenario, the sender and receiver would be on separate machines, communicating over a network. The receiver would measure timing delays directly from the raw connection (e.g. TCP sockets or a custom client), where precise inter-packet timing is preserved.</p>
+            <p>Here, the server plays both roles &mdash; sender <em>and</em> receiver &mdash; because browsers can't measure chunk-level timing accurately enough. The browser's <span class="code">fetch()</span> API doesn't expose inter-chunk timing, so the server decodes on your behalf and streams the results back via WebSocket. It's a useful way to visualize how time-based steganography works, but the real magic happens at the network layer.</p>
+            <details class="deep-dive">
+                <summary>Deep dive: how the web decoder works</summary>
+                <div class="deep-dive-content">
+                    <p><span class="green">1.</span> The browser opens a <span class="code">WebSocket</span> to the server when you click "Decode".</p>
+                    <p><span class="green">2.</span> The server fetches the image from its own endpoint, measuring the real timing delays between chunks as they arrive.</p>
+                    <p><span class="green">3.</span> The server runs the decoding logic &mdash; classifying each delay as a <span class="green">1</span> or <span class="orange">0</span>, finding boundaries, assembling characters.</p>
+                    <p><span class="green">4.</span> Decode results stream back to the browser over the WebSocket in real time: each bit, the partial message, confidence scores.</p>
+                    <p><span class="green">5.</span> The browser is purely a visualization layer &mdash; it renders the bits and characters as they arrive, but does no decoding itself.</p>
+                </div>
+            </details>
         </div>
 
         <!-- CTA -->
