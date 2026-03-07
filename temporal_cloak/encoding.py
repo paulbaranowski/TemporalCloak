@@ -199,9 +199,9 @@ class DistributedEncoder(TemporalCloakEncoding):
         bit_positions = DistributedEncoder.compute_bit_positions(
             key, total_gaps, num_remaining_bits)
 
-        # Build full delay list
-        neutral_delay = TemporalCloakConst.BIT_1_TIME_DELAY
-        delays = [neutral_delay] * total_gaps
+        # Build full delay list — filler gaps always use zero delay
+        # (BIT_1_TIME_DELAY may be non-zero on internet deployments)
+        delays = [0.0] * total_gaps
 
         # Place preamble delays at positions 0-31
         for i, bit in enumerate(preamble_bits):
