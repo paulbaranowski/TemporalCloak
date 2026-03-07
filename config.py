@@ -10,16 +10,7 @@ IMAGES_DIR = os.path.join(BASE_DIR, "content", "images")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 DB_PATH = os.getenv("TC_DB_PATH", os.path.join(BASE_DIR, "data", "links.db"))
 
-# --- Production deployment values (Hostinger VPS) ---
-# Set these as environment variables in the systemd service, or uncomment
-# the overrides below to hardcode them.
-#
-# TC_HOST=0.0.0.0
-# TC_PORT=443
-# TC_TLS_CERT=/etc/letsencrypt/live/yourdomain.com/fullchain.pem
-# TC_TLS_KEY=/etc/letsencrypt/live/yourdomain.com/privkey.pem
-#
-# Timing (wider gaps for internet jitter):
-# TC_BIT_1_DELAY=0.05
-# TC_BIT_0_DELAY=0.30
-# TC_MIDPOINT=0.175
+# Timing: delay (in seconds) inserted between chunks to encode bits
+BIT_1_DELAY = 0.0
+BIT_0_DELAY = 0.10
+MIDPOINT = 0.05
