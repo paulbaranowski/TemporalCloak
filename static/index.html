@@ -474,7 +474,7 @@
                 const thumb = document.createElement('div');
                 thumb.className = 'image-thumb';
                 if (img.filename === selectedImage) thumb.classList.add('selected');
-                thumb.innerHTML = `<img src="${img.url}" alt="${img.filename}" loading="lazy">`;
+                thumb.innerHTML = `<img src="${img.thumbnail_url || img.url}" alt="${img.filename}" loading="lazy">`;
                 thumb.addEventListener('click', () => {
                     document.querySelectorAll('.image-thumb').forEach(t => t.classList.remove('selected'));
                     thumb.classList.add('selected');

@@ -108,6 +108,7 @@ class ImageListHandler(tornado.web.RequestHandler):
                     {
                         "filename": fname,
                         "url": f"/hosted/{fname}",
+                        "thumbnail_url": f"/hosted/thumbnails/{fname}",
                         "size": file_size,
                         "max_message_len": DistributedEncoder.max_message_len(file_size),
                         "max_message_len_frontloaded": FrontloadedEncoder.max_message_len(file_size),
