@@ -410,6 +410,16 @@
         let lastMessage = '';
         let maxDelayObserved = 0.01;
 
+        // ── Fetch config values ──
+        fetch('/api/config')
+            .then(r => r.json())
+            .then(cfg => {
+                document.getElementById('statBit1Delay').textContent = Math.round(cfg.bit_1_delay * 1000) + 'ms';
+                document.getElementById('statBit0Delay').textContent = Math.round(cfg.bit_0_delay * 1000) + 'ms';
+                document.getElementById('statMidpoint').textContent = Math.round(cfg.midpoint * 1000) + 'ms';
+            })
+            .catch(() => {});
+
         // ── Elements ──
         const loadingEl      = document.getElementById('loading');
         const errorPageEl    = document.getElementById('errorPage');
@@ -519,11 +529,6 @@
             ws.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 switch (data.type) {
-                    case 'config':
-                        document.getElementById('statBit1Delay').textContent = (data.bit_1_delay * 1000).toFixed(0) + 'ms';
-                        document.getElementById('statBit0Delay').textContent = (data.bit_0_delay * 1000).toFixed(0) + 'ms';
-                        document.getElementById('statMidpoint').textContent = (data.midpoint * 1000).toFixed(0) + 'ms';
-                        break;
                     case 'sync':
                         break;
                     case 'progress':

@@ -515,9 +515,9 @@
                 <div class="delay-bar" style="height:46px;background:#ff8800;">0</div>
                 <div class="delay-bar" style="height:22px;background:#00ff88;">1</div>
                 <div class="delay-bar" style="height:22px;background:#00ff88;">1</div>
-                <div class="delay-label">&larr; <span class="green">short = 1</span> (~50ms), <span class="orange">long = 0</span> (~300ms)</div>
+                <div class="delay-label">&larr; <span class="green">short = 1</span> (~<span class="cfg-bit1">0ms</span>), <span class="orange">long = 0</span> (~<span class="cfg-bit0">100ms</span>)</div>
             </div>
-            <p>A <span class="green">short delay (~50ms)</span> encodes a binary <span class="green">1</span>. A <span class="orange">longer delay (~300ms)</span> encodes a binary <span class="orange">0</span>. The threshold between them is ~175ms.</p>
+            <p>A <span class="green">short delay (~<span class="cfg-bit1">0ms</span>)</span> encodes a binary <span class="green">1</span>. A <span class="orange">longer delay (~<span class="cfg-bit0">100ms</span>)</span> encodes a binary <span class="orange">0</span>. The threshold between them is ~<span class="cfg-mid">50ms</span>.</p>
         </div>
 
         <!-- Step 3: Chunked Transmission -->
@@ -530,7 +530,7 @@
         <!-- Step 4: Decoding -->
         <div class="card">
             <h3><span class="step-num">4</span> Decoding</h3>
-            <p>The receiver measures the time gap between each arriving chunk. If the gap is below the midpoint threshold (~175ms), it records a <span class="green">1</span>. If above, it records a <span class="orange">0</span>.</p>
+            <p>The receiver measures the time gap between each arriving chunk. If the gap is below the midpoint threshold (~<span class="cfg-mid">50ms</span>), it records a <span class="green">1</span>. If above, it records a <span class="orange">0</span>.</p>
             <p>Once the closing boundary marker (<span class="code">0xFF00</span>) is detected, the accumulated bits are grouped into 8-bit bytes and converted back to ASCII characters. The XOR checksum is verified to ensure message integrity.</p>
         </div>
 
@@ -592,8 +592,8 @@
         ];
         const TOTAL_STEPS = BITS.length; // 16 chunks
 
-        const BIT_1_DELAY = 50;   // ms (short = green)
-        const BIT_0_DELAY = 300;  // ms (long = orange)
+        let BIT_1_DELAY = 0;    // ms (short = green) — updated from /api/config
+        let BIT_0_DELAY = 100;  // ms (long = orange) — updated from /api/config
 
         const animImage      = document.getElementById('animImage');
         const imageWrap      = document.getElementById('imageWrap');
@@ -671,7 +671,7 @@
             const pct = ((step + 1) / TOTAL_STEPS) * 100;
             chunkIndicator.style.top = pct + '%';
             chunkIndicator.className = `chunk-indicator visible bit-${bit}`;
-            delayPill.textContent = bit === 1 ? '50ms' : '300ms';
+            delayPill.textContent = bit === 1 ? '0ms' : '100ms';
         }
 
         function hideChunkIndicator() {
@@ -790,6 +790,21 @@
 
             observer.observe(animCard);
         }
+
+        // Fetch live config and update all dynamic values
+        fetch('/api/config')
+            .then(r => r.json())
+            .then(cfg => {
+                const b1 = Math.round(cfg.bit_1_delay * 1000);
+                const b0 = Math.round(cfg.bit_0_delay * 1000);
+                const mid = Math.round(cfg.midpoint * 1000);
+                BIT_1_DELAY = b1;
+                BIT_0_DELAY = b0;
+                document.querySelectorAll('.cfg-bit1').forEach(el => el.textContent = b1 + 'ms');
+                document.querySelectorAll('.cfg-bit0').forEach(el => el.textContent = b0 + 'ms');
+                document.querySelectorAll('.cfg-mid').forEach(el => el.textContent = mid + 'ms');
+            })
+            .catch(() => {}); // keep defaults on failure
     </script>
 </body>
 </html>
