@@ -132,10 +132,19 @@ If the image is too small to provide enough gaps for the message plus overhead, 
 
 **Step 4 — Sort ascending.** The selected positions are sorted so bits are placed in order as the transmission progresses. This means the encoder and decoder can process chunks in a single forward pass.
 
+The preamble (32 bits) is always contiguous at positions 0–31. Only the remaining message, checksum, and end-boundary bits are scattered across positions 32+.
+
 Here's a concrete example encoding a 2-character message (`"Hi"`) into an image with 80 chunk gaps:
 
 ```
-M = 2×8 + 8 + 16 = 40 bits to scatter
+Total encoded bits: 32 preamble (contiguous) + 40 scattered = 72
+
+M = 2×8 + 8 + 16 = 40 bits to scatter (after the preamble)
+    │ │    │    │
+    │ │    │    └─ end boundary (0xFF00 terminator, 16 bits)
+    │ │    └────── checksum (1 byte for integrity check)
+    │ └─────────── 8 bits per ASCII character
+    └───────────── 2 characters in "Hi"
 
 Candidates: [32, 33, 34, 35, 36, 37, ... 79]   (48 positions)
 
@@ -149,23 +158,15 @@ Take first 40, then sort:
 The resulting gap layout looks like this:
 
 ```
-Gap index:  0         16        32        48        64     79
-            │         │         │         │         │       │
-            ▼         ▼         ▼         ▼         ▼       ▼
-            ┌─────────┬─────────┬─────────────────────────────┐
-Preamble:   │BBBBBBBBBBBBBBBBBKKKKKKKKLLLLLLLL│                │
-            │  boundary (16)  │key (8)│len(8)│                │
-            └────── contiguous ───────┘      │                │
-                                             │                │
-Scattered:                           ·M··M·M··M·M··M···M·M·M·│
-                                             │                │
-Filler:                              F·FF·F·FF·F·FF·FFF·F·F·F│
-            └─────────────────────────────────────────────────┘
+Gap:  0              31 32                                    79
+      ├───────────────┤  ├─────────────────────────────────────┤
+      PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP··M·M··M·M·M··M··M·M····M
+      ├─── boundary ──┤├key┤├len┤     ↑                       ↑
+      (16 bits)        (8)  (8)       scattered data bits    last candidate
 
-    B = preamble bit (boundary + key + length)
-    M = message/checksum/end-boundary bit (at PRNG-selected positions)
-    F = filler (zero delay)
-    · = gap position
+      P = preamble bit (contiguous, always positions 0–31)
+      M = message/checksum/end-boundary bit (PRNG-selected)
+      · = filler gap (zero delay)
 ```
 
 Because the key is only 8 bits, both encoder and decoder share a small search space (256 possible shuffles). But the key isn't meant for cryptographic secrecy — it just spreads the bits out. The security of the covert channel rests on the observer not knowing that timing steganography is being used at all.
