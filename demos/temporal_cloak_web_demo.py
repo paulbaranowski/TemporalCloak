@@ -359,6 +359,13 @@ class DecodeWebSocketHandler(tornado.websocket.WebSocketHandler):
             return
 
         try:
+            self._enqueue({
+                "type": "config",
+                "bit_1_delay": TemporalCloakConst.BIT_1_TIME_DELAY,
+                "bit_0_delay": TemporalCloakConst.BIT_0_TIME_DELAY,
+                "midpoint": TemporalCloakConst.MIDPOINT_TIME,
+            })
+
             protocol = "https" if config.TLS_CERT else "http"
             url = f"{protocol}://localhost:{config.PORT}/api/image/{self.link_id}"
             response = requests_lib.get(url, stream=True, verify=False)

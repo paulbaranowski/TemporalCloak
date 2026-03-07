@@ -464,6 +464,9 @@
                             <div class="stat-item">Threshold: <span class="stat-value" id="statThreshold">-</span></div>
                             <div class="stat-item">Avg Conf: <span class="stat-value" id="statConf">-</span></div>
                             <div class="stat-item">Bits/sec: <span class="stat-value" id="statBps">-</span></div>
+                            <div class="stat-item">Bit 1 delay: <span class="stat-value" id="statBit1Delay">-</span></div>
+                            <div class="stat-item">Bit 0 delay: <span class="stat-value" id="statBit0Delay">-</span></div>
+                            <div class="stat-item">Midpoint: <span class="stat-value" id="statMidpoint">-</span></div>
                         </div>
 
                         <div class="viz-section">
@@ -611,6 +614,11 @@
             ws.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 switch (data.type) {
+                    case 'config':
+                        document.getElementById('statBit1Delay').textContent = (data.bit_1_delay * 1000).toFixed(0) + 'ms';
+                        document.getElementById('statBit0Delay').textContent = (data.bit_0_delay * 1000).toFixed(0) + 'ms';
+                        document.getElementById('statMidpoint').textContent = (data.midpoint * 1000).toFixed(0) + 'ms';
+                        break;
                     case 'sync':
                         break;
                     case 'progress':
