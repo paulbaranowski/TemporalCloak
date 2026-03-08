@@ -2,9 +2,33 @@
 
 This document describes how TemporalCloak hides secret messages in the timing delays between data transmissions.
 
+## Previous Work
+
+TemporalCloak builds upon decades of research in **covert timing channels** - communication methods that hide information in the timing patterns of legitimate network traffic.
+
+### Foundational Research
+- **Lampson, B. W. (1973). A note on the confinement problem. Communications of the ACM, 16(10), 613–615.** Introduced the confinement problem and covert channels, including leakage via effects on shared system resources.
+- **Kemmerer, R. A. (1983). Shared resource matrix methodology: An approach to identifying storage and timing channels. ACM Transactions on Computer Systems, 1(3), 256–277.** Presented a systematic methodology for detecting storage and timing channels throughout the software lifecycle.
+- **Tsai, C. R., & Gligor, V. D. (1988). A bandwidth computation model for covert storage channels and its applications. Proceedings of the IEEE Symposium on Security and Privacy, 108–121.** Developed a model for computing bandwidth in covert storage channels, with applications to real systems. *(Alternative: Gligor, V. D. (1993). A guide to understanding covert channel analysis of trusted systems (NCSC-TG-030). National Computer Security Center.)*
+
+### Covert Timing Channel Implementations
+- **Cabuk, S., Brodley, C. E., & Shields, C. (2004). IP covert timing channels: Design and detection. Proceedings of the 11th ACM Conference on Computer and Communications Security (CCS).** Explored IP covert timing channels and proposed detection methods based on patterns in packet inter-arrival times.
+- **Shah, G., Molina, A., & Blaze, M. (2006). Keyboards and covert channels. Proceedings of the 15th USENIX Security Symposium.** Introduced JitterBug mechanisms that create covert network timing channels via timing perturbations at input devices like keyboards.
+- **Gianvecchio, S., & Wang, H. (2007). Detecting covert timing channels: An entropy-based approach. Proceedings of the 14th ACM Conference on Computer and Communications Security (CCS).** Proposed entropy-based detection for covert timing channels using information-theoretic measures.
+- **Wendzel, S. (various). NetworkCovertChannels: Collection of network covert channel tools.** GitHub repository. https://github.com/cdpxe/NetworkCovertChannels. Aggregates practical implementations including protocol hopping (phcct, 2007), tunneling (vstt, 2006), history-based amplification (DYST, 2025; IEEE TDSC), and reconnection-based wireless channels (2021; IFIP SEC), primarily focusing on storage/hybrid mechanisms, protocol manipulation, and countermeasures.
+
+### Key Insights from Previous Work
+Covert timing channels exploit the fact that network protocols inherently include timing variations that are often ignored by security monitoring. Previous research has shown that:
+- Timing channels can achieve high bandwidth in certain scenarios through multi-level encoding and parallel channels
+- Detection is challenging due to natural network jitter and timing variations
+- Most timing channels rely on the covert nature (observer doesn't know to look for timing steganography)
+- Detection methods typically use statistical analysis, entropy measures, or machine learning approaches
+
+TemporalCloak advances this field by implementing practical timing steganography with distributed encoding, automatic mode detection, and adaptive threshold calibration.
+
 ## Core Concept
 
-TemporalCloak is a **covert timing channel**. The secret message is never present in the transmitted data — it is encoded entirely in the *time gaps* between successive data chunks. The actual bytes sent are irrelevant (random in Demo 1, image data in Demo 2). Only the inter-arrival timing carries information.
+TemporalCloak is a **covert timing channel**. The secret message is never present in the transmitted data — it is encoded entirely in the *time gaps* between successive data chunks. The actual bytes sent are irrelevant (random in Client-Encoder, image data in Server-Encoder). Only the inter-arrival timing carries information.
 
 ## Bit Encoding
 
@@ -25,9 +49,9 @@ A complete message transmission has this bit-level layout:
 
 ```
 ┌──────────────┬───────────────────┬──────────┬──────────────┐
-│  Boundary    │  Payload          │ Checksum │  Boundary    │
-│  0xFF00      │  ASCII message    │  8-bit   │  0xFF00      │
-│  (16 bits)   │  (N × 8 bits)     │  XOR     │  (16 bits)   │
+│   Boundary   │     Payload       │ Checksum │   Boundary   │
+│    0xFF00    │   ASCII message   │  8-bit   │    0xFF00    │
+│  (16 bits)   │   (N × 8 bits)    │   XOR    │  (16 bits)   │
 └──────────────┴───────────────────┴──────────┴──────────────┘
 ```
 
@@ -46,7 +70,7 @@ An 8-bit XOR checksum is computed over the raw payload bytes and appended after 
 
 ## Encoding Process (Sender)
 
-1. **Validate** the message is ASCII-only (rejects any byte ≥ `0x80`).
+1. **Validate** the message is ASCII-only (rejects any non-ASCII characters).
 2. **Convert** the message string to its bit representation using `bitstring.BitArray`.
 3. **Compute** the 8-bit XOR checksum of the raw message bytes.
 4. **Assemble** the frame: prepend `0xFF00`, append checksum bits, append `0xFF00`.
@@ -89,21 +113,25 @@ Message bits are **scattered pseudo-randomly** across all available chunk gaps, 
 
 ```
 ┌──────────────┬──────────┬─────────────┐
-│  Boundary    │  Key     │  Msg Length  │
-│  0xFF01      │  8-bit   │  8-bit       │
-│  (16 bits)   │  random  │  (chars)     │
+│   Boundary   │   Key    │  Msg Length │
+│    0xFF01    │  8-bit   │   8-bit     │
+│  (16 bits)   │  random  │  (chars)    │
 └──────────────┴──────────┴─────────────┘
 ```
 
 **Scattered data** (placed at PRNG-selected positions after the preamble):
+Message payload + checksum + **ending boundary** (all scattered randomly)
 
 ```
-┌───────────────────┬──────────┬─────────────┐
-│  Payload          │ Checksum │  Boundary    │
-│  ASCII message    │  8-bit   │  0xFF01      │
-│  (N × 8 bits)     │  XOR     │  (16 bits)   │
-└───────────────────┴──────────┴─────────────┘
+┌───────────────────┬──────────┬──────────────┐
+│     Payload       │ Checksum │ Ending       │
+│   ASCII message   │  8-bit   │ Boundary     │
+│   (N × 8 bits)    │   XOR    │ (16 bits)    │
+│                   │          │   0xFF01     │
+└───────────────────┴──────────┴──────────────┘
 ```
+
+*Note: Distributed mode includes an ending boundary marker just like frontloaded mode, even though the preamble contains the message length. This provides additional error detection and maintains frame format consistency. The length field specifies character count, while boundary markers provide the actual message framing in the bit stream.*
 
 **Bit position selection**:
 
@@ -157,17 +185,30 @@ Take first 40, then sort:
 
 The resulting gap layout looks like this:
 
-```
-Gap:  0                             31  32                      79
-      ├──────────────────────────────┤  ├────────────────────────┤
-      PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP  ··M·M··M·M·M··M··M·M····M
-      ├── boundary ──┤├─key──┤├─len──┤    ↑                      ↑
-         (16 bits)     (8)    (8)         scattered data bits  last candidate
+```mermaid
+graph LR
+    A[Boundary<br/>16 bits<br/>0xFF01] --> B[Key<br/>8 bits<br/>random] --> C[Length<br/>8 bits<br/>char count]
 
-      P = preamble bit (contiguous, always positions 0–31)
-      M = message/checksum/end-boundary bit (PRNG-selected)
-      · = filler gap (zero delay)
+    C --> D[Message<br/>N×8 bits<br/>ASCII payload] --> E[Checksum<br/>8 bits<br/>XOR] --> F[End Boundary<br/>16 bits<br/>0xFF01]
+
+    A:::boundary
+    B:::metadata
+    C:::metadata
+    D:::payload
+    E:::metadata
+    F:::boundary
+
+    classDef boundary fill:#e8f5e8,stroke:#2e7d32
+    classDef metadata fill:#e1f5fe,stroke:#01579b
+    classDef payload fill:#fff3e0,stroke:#ef6c00
 ```
+
+**Layout**: Positions 0-31 are contiguous preamble, positions 32+ are scattered data at PRNG-selected locations.
+
+**Example**: For "Hi" (2 chars) with 80 gaps:
+- **Contiguous preamble**: Positions 0-31 (32 bits total)
+- **Scattered data**: 40 bits (16 message + 8 checksum + 16 end boundary) at PRNG-selected positions 32-79
+- **Filler gaps**: Remaining positions use zero delay (indistinguishable from '1' bits)
 
 Because the key is only 8 bits, both encoder and decoder share a small search space (256 possible shuffles). But the key isn't meant for cryptographic secrecy — it just spreads the bits out. The security of the covert channel rests on the observer not knowing that timing steganography is being used at all.
 
@@ -186,46 +227,63 @@ It then instantiates the appropriate decoder and replays the collected delays.
 
 ## Transmission Modes
 
-### Demo 1: Raw TCP Sockets
+### Client-Encoder: Raw TCP Sockets
 
 The client sends **one random byte per bit**, with the delay between sends encoding the message. The server receives bytes one at a time and measures inter-arrival times. Uses frontloaded encoding.
 
-```
-Client                              Server
-  │                                   │
-  ├─── random byte ───────────────────►│  (sync byte, discarded)
-  │     sleep(delay[0])               │
-  ├─── random byte ───────────────────►│  mark_time() → bit 0
-  │     sleep(delay[1])               │
-  ├─── random byte ───────────────────►│  mark_time() → bit 1
-  │     ...                           │  ...
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Server
+
+    Note over Client,Server: Client-Encoder - Raw TCP Sockets (Frontloaded)
+
+    Client->>Server: Random byte (sync, discarded)
+    Note right of Server: start_timer()
+
+    Client->>Server: Random byte + sleep(delay[0])
+    Note right of Server: mark_time() → bit 0
+
+    Client->>Server: Random byte + sleep(delay[1])
+    Note right of Server: mark_time() → bit 1
+
+    Note over Client: ...continue for each bit...
 ```
 
-### Demo 2: HTTP Chunked Image Transfer
+### Server-Encoder: HTTP Chunked Image Transfer
 
 The server sends an image file in fixed-size chunks (default 256 bytes) over HTTP. The delay between chunks encodes a hidden quote. The client fetches the image and decodes timing from chunk arrivals. Uses distributed encoding by default.
 
-```
-Server                          Client
-  │                               │
-  ├─── image chunk[0] ───────────►│  start_timer()
-  │     sleep(delay[0])           │
-  ├─── image chunk[1] ───────────►│  mark_time() → bit 0
-  │     sleep(delay[1])           │
-  ├─── image chunk[2] ───────────►│  mark_time() → bit 1
-  │     ...                       │  ...
+```mermaid
+sequenceDiagram
+    participant Server
+    participant Client
+
+    Note over Server,Client: Server-Encoder - HTTP Image Transfer (Distributed)
+
+    Server->>Client: Image chunk[0]
+    Note right of Client: start_timer()
+
+    Server->>Client: sleep(delay[0]) + Image chunk[1]
+    Note right of Client: mark_time() → bit 0
+
+    Server->>Client: sleep(delay[1]) + Image chunk[2]
+    Note right of Client: mark_time() → bit 1
+
+    Note over Server,Client: ...continue for each chunk...
+    Note right of Client: Most gaps have zero delay (filler)
 ```
 
 In distributed mode, most chunk gaps carry zero delay (filler). Only the preamble gaps and the PRNG-selected gaps carry real timing information. The client's `AutoDecoder` detects the mode from the boundary marker and knows which gaps to interpret.
 
-The encoding/decoding roles are **swapped** between demos: in Demo 1 the client encodes; in Demo 2 the server encodes.
+The encoding/decoding roles are **swapped** between modes: in Client-Encoder the client encodes; in Server-Encoder the server encodes.
 
 ## Capacity
 
 The number of characters a transmission can carry depends on the available "delay slots":
 
-- **Demo 1 (TCP)**: unlimited — the client can send as many bytes as needed.
-- **Demo 2 (HTTP image)**: constrained by image file size. Each chunk after the first provides one delay slot.
+- **Client-Encoder (TCP)**: unlimited — the client can send as many bytes as needed.
+- **Server-Encoder (HTTP image)**: constrained by image file size. Each chunk after the first provides one delay slot.
 
 **Frontloaded mode** — maximum message length for an image of size `S` bytes with chunk size `C`:
 
@@ -264,3 +322,37 @@ With default delay values:
 This is intentionally slow — covert channels trade bandwidth for stealth.
 
 In distributed mode, the total transmission time is dominated by the image transfer itself, since most gaps are zero-delay filler. The message bits are spread across the full duration rather than concentrated at the start, trading slightly more total time for significantly better stealth.
+
+## Future Work
+
+Several advanced techniques could enhance TemporalCloak's bandwidth and robustness:
+
+### Multi-Image Timing Differential
+Instead of encoding within a single image's chunk gaps, future work could measure timing differences between corresponding chunks of two different images. This approach would:
+- Encode information in the relative timing between parallel streams
+- Provide higher bandwidth through cross-stream timing relationships
+- Add another layer of steganographic concealment
+
+### Advanced Modulation Techniques
+- **Multi-level encoding**: Use more than two delay values (e.g., 4 or 8 delay levels) to encode multiple bits per timing event, significantly increasing bandwidth
+- **Frequency domain modulation**: Encode information in the frequency spectrum of timing patterns rather than just delay durations. Instead of binary delay lengths, create timing sequences with different frequency characteristics (e.g., high-frequency rapid delays vs. low-frequency spaced delays) that can be detected through spectral analysis. This allows encoding information in both the timing and frequency domains for higher bandwidth.
+- **Phase modulation**: Vary the relative timing phase between different packet streams
+- **Adaptive modulation**: Dynamically adjust encoding parameters based on detected network conditions and jitter patterns
+- **Error correction coding**: Add forward error correction to improve reliability over lossy network conditions
+
+## Conclusion
+
+TemporalCloak demonstrates a practical implementation of covert timing channel steganography, hiding secret messages entirely within the timing patterns of legitimate HTTP image transfers and TCP socket communications.
+
+### Key Innovation
+TemporalCloak is best understood as a practical, production-style example of covert timing channel steganography: one of the few publicly available, user-friendly implementations that supports dual real-world modes (client TCP and server HTTP image transfer). Its distinguishing features include:
+- **Real-world deployment**: Running as a systemd service on a public VPS with TLS termination
+- **Dual transmission modes**: Supporting both client-initiated (TCP sockets) and server-initiated (HTTP image transfers) covert communication
+- **Automatic mode detection**: Self-identifying encoding schemes through boundary marker analysis
+- **Robust error handling**: Adaptive threshold calibration and checksum validation for reliable operation over lossy networks
+
+### Contributions to the Field
+TemporalCloak advances covert timing channel research by providing a complete, deployable system that addresses practical challenges in real-world network environments. It demonstrates how timing steganography can achieve reliable communication while maintaining the covert nature that makes these channels difficult to detect.
+
+### Applications and Limitations
+Covert timing channels like TemporalCloak have applications in secure communications where traditional encryption might attract attention. However, they are inherently low-bandwidth and rely on the observer's ignorance of timing steganography for security. Future work in advanced modulation techniques could significantly improve bandwidth while maintaining stealth properties.
