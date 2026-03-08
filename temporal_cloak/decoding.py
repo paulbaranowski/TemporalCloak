@@ -199,16 +199,12 @@ class TemporalCloakDecoding:
         """Record a timing gap and decode. Subclasses override for mode-specific logic."""
         raise NotImplementedError("Use FrontloadedDecoder or DistributedDecoder")
 
-    def display_completed(self, decode_attempt: str) -> None:
-        if not decode_attempt:
-            # Empty message between consecutive boundaries — skip display
-            self.jump_to_next_message()
-            return
-        print("Decoded message: {}".format(decode_attempt))
-        total_time = time.monotonic() - self._start_time
-        print("Total time: {}".format(total_time))
-        print("bits/second: {}".format(len(decode_attempt) * 8 / total_time))
-        # truncate the bits array and start again
+    def on_completed(self, decode_attempt: str) -> None:
+        """Called when a complete message is decoded.
+
+        Resets internal state to prepare for the next message.
+        Override or attach a callback for custom display logic.
+        """
         self.jump_to_next_message()
 
     def __str__(self):
@@ -237,7 +233,7 @@ class FrontloadedDecoder(TemporalCloakDecoding):
 
         decode_attempt, self._completed, end_pos = self.bits_to_message()
         if self._completed:
-            self.display_completed(decode_attempt)
+            self.on_completed(decode_attempt)
         return time_diff
 
     def __repr__(self):
@@ -318,7 +314,7 @@ class DistributedDecoder(TemporalCloakDecoding):
 
         decode_attempt, self._completed, end_pos = self.bits_to_message()
         if self._completed:
-            self.display_completed(decode_attempt)
+            self.on_completed(decode_attempt)
         return time_diff
 
     def __repr__(self):
@@ -348,6 +344,8 @@ class AutoDecoder:
         self._mode = None
         self._start_time = None
         self._last_recv_time = None
+        self._bit_count = 0
+        self._prev_bits_len = 0
 
     @property
     def delegate(self):
@@ -393,6 +391,43 @@ class AutoDecoder:
             return self._delegate._last_message
         return None
 
+    @property
+    def bit_count(self) -> int:
+        return self._bit_count
+
+    @property
+    def partial_message(self) -> str:
+        """Stable partial message — only complete characters, preamble-aware."""
+        if not self._delegate or self._bit_count == 0:
+            return ""
+        if self._mode == "distributed":
+            preamble = TemporalCloakConst.PREAMBLE_BITS
+        else:
+            preamble = TemporalCloakDecoding.BOUNDARY_LEN
+        data_bits = self._bit_count - preamble if self._bit_count > preamble else 0
+        if data_bits <= 0:
+            return ""
+        msg, _, _ = self.bits_to_message()
+        if not msg:
+            return ""
+        complete_chars = data_bits // 8
+        display_chars = max(0, complete_chars - 1)
+        return msg[:display_chars]
+
+    @property
+    def message(self) -> str:
+        """Final message if complete, otherwise partial."""
+        if self._delegate and self._delegate._last_message:
+            return self._delegate._last_message
+        return self.partial_message
+
+    @property
+    def message_complete(self) -> bool:
+        """True when a full message has been decoded."""
+        if self._delegate:
+            return bool(self._delegate._last_message)
+        return False
+
     def start_timer(self):
         self._start_time = time.monotonic()
         self._last_recv_time = self._start_time
@@ -411,6 +446,7 @@ class AutoDecoder:
             # Already bootstrapped — forward directly
             self._delegate._last_recv_time = current_time - time_diff
             self._delegate.mark_time()
+            self._track_bit_count()
             return time_diff
 
         # Still collecting boundary bits
@@ -447,7 +483,18 @@ class AutoDecoder:
                 if self._delegate._gap_index == TemporalCloakConst.PREAMBLE_BITS:
                     self._delegate._process_preamble()
 
+        # After bootstrap replay, set bit count to match replayed bits
+        self._bit_count = len(self._delegate.bits)
+        self._prev_bits_len = self._bit_count
+
         return time_diff
+
+    def _track_bit_count(self):
+        """Update bit count if the delegate's bitstream grew."""
+        new_len = len(self._delegate.bits)
+        if new_len > self._prev_bits_len:
+            self._prev_bits_len = new_len
+            self._bit_count += 1
 
     def __repr__(self):
         return (f"AutoDecoder(mode={self._mode!r}, "

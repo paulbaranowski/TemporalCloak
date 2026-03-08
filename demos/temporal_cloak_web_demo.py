@@ -484,7 +484,7 @@ class DecodeWebSocketHandler(tornado.websocket.WebSocketHandler):
                     })
 
                 # Check completion OUTSIDE the new-bits guard, because
-                # display_completed() truncates bits internally
+                # on_completed() truncates bits internally
                 if decoder.completed:
                     self._enqueue(
                         {

@@ -1,3 +1,7 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "temporal-cloak"
 version = "0.1.0"
@@ -5,9 +9,13 @@ description = "Time-Based Steganography"
 requires-python = ">=3.13"
 dependencies = [
     "bitstring",
+    "click",
     "tornado",
     "requests",
     "rich",
     "humanize",
     "pillow",
 ]
+
+[project.scripts]
+temporal-cloak = "temporal_cloak.cli:cli"

@@ -235,6 +235,10 @@ class TestAutoDecoderEdgeCases(unittest.TestCase):
         self.assertEqual(decoder.threshold, TemporalCloakConst.MIDPOINT_TIME)
         self.assertEqual(decoder.confidence_scores, [])
         self.assertIsNone(decoder._last_message)
+        self.assertEqual(decoder.bit_count, 0)
+        self.assertEqual(decoder.partial_message, "")
+        self.assertEqual(decoder.message, "")
+        self.assertFalse(decoder.message_complete)
         # bits_to_message returns empty tuple before bootstrap
         result, completed, end_pos = decoder.bits_to_message()
         self.assertEqual(result, "")
@@ -246,6 +250,110 @@ class TestAutoDecoderEdgeCases(unittest.TestCase):
         from bitstring import BitStream
         decoder = AutoDecoder(total_gaps=100)
         self.assertEqual(len(decoder.bits), 0)
+
+
+class TestAutoDecoderProgressProperties(unittest.TestCase):
+    """Test bit_count, partial_message, message, and message_complete during decode."""
+
+    def test_frontloaded_properties_during_decode(self):
+        """Feed delays incrementally, verify properties at each stage."""
+        import time
+
+        encoder = FrontloadedEncoder()
+        encoder.message = "hello"
+        delays = encoder.delays
+        boundary_len = 16  # 0xFF00
+
+        decoder = AutoDecoder(total_gaps=0)
+        decoder._start_time = decoder._last_recv_time = time.monotonic()
+
+        # Stage 1: Before any delays
+        self.assertEqual(decoder.bit_count, 0)
+        self.assertEqual(decoder.partial_message, "")
+        self.assertEqual(decoder.message, "")
+        self.assertFalse(decoder.message_complete)
+
+        # Stage 2: Feed the boundary (first 16 delays) — triggers bootstrap
+        for delay in delays[:boundary_len]:
+            decoder._last_recv_time -= delay
+            decoder.mark_time()
+
+        self.assertEqual(decoder.bit_count, boundary_len)
+        self.assertEqual(decoder.mode, "frontloaded")
+        # Still in preamble, no message chars yet
+        self.assertEqual(decoder.partial_message, "")
+        self.assertFalse(decoder.message_complete)
+
+        # Stage 3: Feed enough delays for ~2 complete characters (16 more bits)
+        # After preamble, each 8 bits = 1 char. partial_message shows
+        # complete_chars - 1 to avoid half-decoded trailing chars.
+        two_chars_worth = delays[boundary_len:boundary_len + 16]
+        for delay in two_chars_worth:
+            decoder._last_recv_time -= delay
+            decoder.mark_time()
+
+        self.assertEqual(decoder.bit_count, boundary_len + 16)
+        # 16 data bits = 2 complete chars, display 2-1 = 1 char
+        self.assertEqual(len(decoder.partial_message), 1)
+        self.assertEqual(decoder.partial_message, "h")
+        self.assertFalse(decoder.message_complete)
+
+        # Stage 4: Feed all remaining delays to complete the message
+        for delay in delays[boundary_len + 16:]:
+            decoder._last_recv_time -= delay
+            decoder.mark_time()
+            if decoder.message_complete:
+                break
+
+        self.assertTrue(decoder.message_complete)
+        self.assertEqual(decoder.message, "hello")
+        self.assertTrue(decoder.checksum_valid)
+
+    def test_distributed_properties_during_decode(self):
+        """bit_count and message work correctly in distributed mode."""
+        import math
+        import time
+
+        encoder = DistributedEncoder()
+        encoder.message = "hi"
+        image_size = 50000
+        chunk_size = 256
+        delays = encoder.generate_delays(image_size, chunk_size)
+        total_gaps = math.ceil(image_size / chunk_size) - 1
+
+        decoder = AutoDecoder(total_gaps)
+        decoder._start_time = decoder._last_recv_time = time.monotonic()
+
+        for delay in delays:
+            decoder._last_recv_time -= delay
+            decoder.mark_time()
+            if decoder.message_complete:
+                break
+
+        self.assertEqual(decoder.mode, "distributed")
+        self.assertTrue(decoder.message_complete)
+        self.assertEqual(decoder.message, "hi")
+        self.assertGreater(decoder.bit_count, 0)
+
+    def test_bit_count_increments(self):
+        """bit_count should grow monotonically as delays are fed."""
+        import time
+
+        encoder = FrontloadedEncoder()
+        encoder.message = "AB"
+
+        decoder = AutoDecoder(total_gaps=0)
+        decoder._start_time = decoder._last_recv_time = time.monotonic()
+
+        prev_count = 0
+        for delay in encoder.delays:
+            decoder._last_recv_time -= delay
+            decoder.mark_time()
+            self.assertGreaterEqual(decoder.bit_count, prev_count)
+            prev_count = decoder.bit_count
+
+        self.assertTrue(decoder.message_complete)
+        self.assertEqual(decoder.message, "AB")
 
 
 class TestDistributedEdgeCases(unittest.TestCase):

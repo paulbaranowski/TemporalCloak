@@ -1,10 +1,12 @@
-import config
+_BIT_1_DELAY = 0.0
+_BIT_0_DELAY = 0.20
+_MIDPOINT = 0.1
 
 
 class TemporalCloakConst:
-    BIT_1_TIME_DELAY = config.BIT_1_DELAY
-    BIT_0_TIME_DELAY = config.BIT_0_DELAY
-    MIDPOINT_TIME = config.MIDPOINT
+    BIT_1_TIME_DELAY = _BIT_1_DELAY
+    BIT_0_TIME_DELAY = _BIT_0_DELAY
+    MIDPOINT_TIME = _MIDPOINT
 
     # These are used to indicate the separation between messages.
     # If bits are dropped or missed, the message receiver can look
