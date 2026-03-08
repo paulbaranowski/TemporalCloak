@@ -114,9 +114,9 @@ class TestEmptyMessageGuard(unittest.TestCase):
         decoder._bits = bits
         result, completed, end_pos = decoder.bits_to_message()
         self.assertTrue(completed)
-        # Should decode to empty string, and display_completed should not crash
+        # Should decode to empty string, and on_completed should not crash
         self.assertEqual(result, "")
-        decoder.display_completed(result)  # should not raise
+        decoder.on_completed(result)  # should not raise
 
 
 class TestBitAlignment(unittest.TestCase):

@@ -34,6 +34,8 @@ def main():
                 first_chunk = False
             else:
                 cloak.mark_time()
+                if cloak.completed and cloak._last_message:
+                    print("Decoded message: {}".format(cloak._last_message))
     print("Total bytes received: {}".format(str(total_bytes)))
     print("Total bytes received: {}".format(humanize.naturalsize(total_bytes, True, False, "%.2f")))
 
