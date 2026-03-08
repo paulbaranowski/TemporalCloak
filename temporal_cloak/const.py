@@ -1,6 +1,6 @@
 _BIT_1_DELAY = 0.0
-_BIT_0_DELAY = 0.20
-_MIDPOINT = 0.1
+_BIT_0_DELAY = 0.30
+_MIDPOINT = 0.15
 
 
 class TemporalCloakConst:

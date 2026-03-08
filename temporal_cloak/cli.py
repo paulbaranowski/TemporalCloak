@@ -198,21 +198,24 @@ class DecodeSession:
         diag.add_column("Check", style="dim")
         diag.add_column("Result")
 
-        delegate = self._cloak.delegate
         diag.add_row("Total bits", str(self._cloak.bit_count))
 
-        if delegate:
+        if self._cloak.delegate:
             from temporal_cloak.decoding import TemporalCloakDecoding
+            bits = self._cloak.bits
+            boundary = self._cloak.boundary
+            boundary_len = self._cloak.boundary_len
+
             start_boundary = TemporalCloakDecoding.find_boundary(
-                delegate._bits, boundary_hex=delegate.BOUNDARY
+                bits, boundary_hex=boundary
             )
             mode_label = self._cloak.mode or "none"
             if start_boundary is not None:
                 diag.add_row("Mode", f"[green]{mode_label}[/green]")
                 diag.add_row("Start boundary", f"[green]found at bit {start_boundary}[/green]")
                 end_boundary = TemporalCloakDecoding.find_boundary(
-                    delegate._bits, start_boundary + delegate.BOUNDARY_LEN,
-                    boundary_hex=delegate.BOUNDARY
+                    bits, start_boundary + boundary_len,
+                    boundary_hex=boundary
                 )
                 if end_boundary is not None:
                     diag.add_row("End boundary", f"[green]found at bit {end_boundary}[/green]")
@@ -222,12 +225,12 @@ class DecodeSession:
                 diag.add_row("Mode", f"[yellow]{mode_label}[/yellow] (detected during bootstrap but lost after recalibration)")
                 diag.add_row("Start boundary", "[red]NOT FOUND[/red] — recalibration likely flipped boundary bits")
 
-            msg, completed, _ = delegate.bits_to_message()
+            msg, completed, _ = self._cloak.bits_to_message()
             if msg:
                 printable = "".join(c if 32 <= ord(c) < 127 else "?" for c in msg)
                 diag.add_row("Partial decode", f"[dim]{printable[:80]}[/dim]")
 
-            delays = delegate._time_delays
+            delays = self._cloak.time_delays
             if delays:
                 short = [d for d in delays if d <= self._cloak.threshold]
                 long = [d for d in delays if d > self._cloak.threshold]
