@@ -386,6 +386,34 @@ class AutoDecoder:
         return []
 
     @property
+    def last_delay(self) -> float:
+        """Most recent timing delay recorded by the delegate."""
+        if self._delegate and self._delegate._time_delays:
+            return self._delegate._time_delays[-1]
+        return 0.0
+
+    @property
+    def time_delays(self) -> list:
+        """All recorded timing delays from the delegate."""
+        if self._delegate:
+            return self._delegate._time_delays
+        return []
+
+    @property
+    def boundary(self) -> str:
+        """Boundary marker hex string used by the delegate."""
+        if self._delegate:
+            return self._delegate.BOUNDARY
+        return TemporalCloakDecoding.BOUNDARY
+
+    @property
+    def boundary_len(self) -> int:
+        """Length of the delegate's boundary marker in bits."""
+        if self._delegate:
+            return self._delegate.BOUNDARY_LEN
+        return TemporalCloakDecoding.BOUNDARY_LEN
+
+    @property
     def _last_message(self):
         if self._delegate:
             return self._delegate._last_message
