@@ -346,6 +346,7 @@ class AutoDecoder:
         self._last_recv_time = None
         self._bit_count = 0
         self._prev_bits_len = 0
+        self._partial_high_water = ""
 
     @property
     def delegate(self):
@@ -424,23 +425,49 @@ class AutoDecoder:
         return self._bit_count
 
     @property
+    def start_boundary_found(self) -> bool:
+        """True once the start boundary has been detected (bootstrap complete)."""
+        return self._delegate is not None
+
+    @property
+    def end_boundary_found(self) -> bool:
+        """True once the end boundary has been found (message complete)."""
+        return self.message_complete
+
+    @property
+    def bootstrap_progress(self) -> tuple[int, int]:
+        """Progress toward detecting the start boundary: (collected, needed)."""
+        needed = TemporalCloakDecoding.BOUNDARY_LEN
+        if self._delegate is not None:
+            return needed, needed
+        return len(self._bootstrap_delays), needed
+
+    @property
     def partial_message(self) -> str:
-        """Stable partial message — only complete characters, preamble-aware."""
+        """Stable partial message — only complete characters, preamble-aware.
+
+        Uses a high-water mark so the result never shrinks. This prevents
+        the message from disappearing while end-boundary bits arrive (the
+        partial boundary bytes are non-ASCII, causing decode() to return "").
+        """
         if not self._delegate or self._bit_count == 0:
-            return ""
+            return self._partial_high_water
         if self._mode == "distributed":
             preamble = TemporalCloakConst.PREAMBLE_BITS
         else:
             preamble = TemporalCloakDecoding.BOUNDARY_LEN
         data_bits = self._bit_count - preamble if self._bit_count > preamble else 0
         if data_bits <= 0:
-            return ""
+            return self._partial_high_water
         msg, _, _ = self.bits_to_message()
         if not msg:
-            return ""
+            return self._partial_high_water
         complete_chars = data_bits // 8
         display_chars = max(0, complete_chars - 1)
-        return msg[:display_chars]
+        candidate = msg[:display_chars]
+        if len(candidate) > len(self._partial_high_water):
+            self._partial_high_water = candidate
+        return self._partial_high_water
 
     @property
     def message(self) -> str:

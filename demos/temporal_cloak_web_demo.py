@@ -1,4 +1,5 @@
 import logging
+import math
 import ssl
 import time
 import sys
@@ -193,6 +194,11 @@ class CreateLinkHandler(tornado.web.RequestHandler):
 
         burn_after_reading = bool(body.get("burn_after_reading", False))
 
+        # Generate a PRNG key for distributed mode so it's consistent
+        # across image serving and debug inspection.
+        import random
+        dist_key = random.randint(0, 255) if mode == "distributed" else None
+
         link_id = secrets.token_hex(4)
         link_store.create(
             link_id=link_id,
@@ -202,6 +208,7 @@ class CreateLinkHandler(tornado.web.RequestHandler):
             created_at=time.time(),
             burn_after_reading=burn_after_reading,
             mode=mode,
+            dist_key=dist_key,
         )
         logger.info(
             "Created link %s: message='%s', image='%s', burn=%s",
@@ -263,7 +270,7 @@ class EncodedImageHandler(tornado.web.RequestHandler):
         else:
             cloak = DistributedEncoder()
             cloak.message = link["message"]
-            delays = cloak.generate_delays(image_size)
+            delays = cloak.generate_delays(image_size, key=link.get("dist_key"))
 
         self.set_header("Content-Length", str(image_size))
         gap_index = 0
@@ -290,6 +297,50 @@ class EncodedImageHandler(tornado.web.RequestHandler):
                     break
 
         logger.info("Sent encoded image for link %s", link_id)
+
+
+class DebugLinkHandler(tornado.web.RequestHandler):
+    """Returns the original message and full signal-bit sequence for a link."""
+
+    def get(self, link_id):
+        link = link_store.get(link_id)
+        if not link:
+            self.set_status(404)
+            self.write({"error": "Link not found"})
+            return
+
+        message = link["message"]
+        mode = link.get("mode", "distributed")
+        image_size = os.path.getsize(link["image_path"])
+        chunk_size = TemporalCloakConst.CHUNK_SIZE_TORNADO
+
+        if mode == "frontloaded":
+            encoder = FrontloadedEncoder()
+            encoder.message = message
+        else:
+            encoder = DistributedEncoder()
+            encoder.message = message
+            encoder.generate_delays(image_size, key=link.get("dist_key"))
+
+        signal = encoder.debug_signal_bits()
+        total_gaps = math.ceil(image_size / chunk_size) - 1
+
+        result = {
+            "id": link_id,
+            "message": message,
+            "mode": mode,
+            "image_filename": link["image_filename"],
+            "image_size": image_size,
+            "total_chunks": math.ceil(image_size / chunk_size),
+            "total_gaps": total_gaps,
+            "signal_bits": signal.bin,
+            "signal_bits_hex": signal.hex,
+            "signal_bit_count": len(signal),
+            "sections": encoder.debug_sections(),
+        }
+
+        self.set_header("Content-Type", "application/json")
+        self.write(json.dumps(result, indent=2))
 
 
 class NormalImageHandler(tornado.web.RequestHandler):
@@ -508,6 +559,7 @@ def make_app():
         (r"/api/images", ImageListHandler),
         (r"/api/create", CreateLinkHandler),
         (r"/api/link/([a-f0-9]+)", LinkInfoHandler),
+        (r"/api/image/([a-f0-9]+)/debug", DebugLinkHandler),
         (r"/api/image/([a-f0-9]+)/normal", NormalImageHandler),
         (r"/api/image/([a-f0-9]+)", EncodedImageHandler),
         (r"/api/decode/([a-f0-9]+)", DecodeWebSocketHandler),

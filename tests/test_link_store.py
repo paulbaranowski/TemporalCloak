@@ -161,5 +161,72 @@ class TestLinkStoreMode(unittest.TestCase):
         self.assertEqual(link["mode"], "distributed")
 
 
+class TestLinkStoreDistKey(unittest.TestCase):
+    """Tests for the dist_key column."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.tmpdir, "test.db")
+        self.store = LinkStore(self.db_path)
+
+    def tearDown(self):
+        self.store.close()
+        if os.path.exists(self.db_path):
+            os.remove(self.db_path)
+        os.rmdir(self.tmpdir)
+
+    def test_dist_key_persists(self):
+        self.store.create(
+            link_id="k1",
+            message="test",
+            image_path="/img/test.jpg",
+            image_filename="test.jpg",
+            created_at=1000.0,
+            mode="distributed",
+            dist_key=42,
+        )
+        link = self.store.get("k1")
+        self.assertEqual(link["dist_key"], 42)
+
+    def test_dist_key_none_for_frontloaded(self):
+        self.store.create(
+            link_id="k2",
+            message="test",
+            image_path="/img/test.jpg",
+            image_filename="test.jpg",
+            created_at=1000.0,
+            mode="frontloaded",
+        )
+        link = self.store.get("k2")
+        self.assertIsNone(link["dist_key"])
+
+    def test_dist_key_default_is_none(self):
+        self.store.create(
+            link_id="k3",
+            message="test",
+            image_path="/img/test.jpg",
+            image_filename="test.jpg",
+            created_at=1000.0,
+        )
+        link = self.store.get("k3")
+        self.assertIsNone(link["dist_key"])
+
+    def test_dist_key_survives_reopen(self):
+        self.store.create(
+            link_id="k4",
+            message="test",
+            image_path="/img/test.jpg",
+            image_filename="test.jpg",
+            created_at=1000.0,
+            dist_key=200,
+        )
+        self.store.close()
+
+        store2 = LinkStore(self.db_path)
+        link = store2.get("k4")
+        self.assertEqual(link["dist_key"], 200)
+        store2.close()
+
+
 if __name__ == "__main__":
     unittest.main()

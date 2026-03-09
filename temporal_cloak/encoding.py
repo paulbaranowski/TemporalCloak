@@ -18,6 +18,7 @@ class TemporalCloakEncoding:
         self._message_encoded = None
         self._message_bits = None
         self._message_bits_padded = None
+        self._checksum = None
         self._delays = []
 
     @property
@@ -64,8 +65,8 @@ class TemporalCloakEncoding:
         self._message_bits = BitArray(self._message_encoded)
         print("Message bits: {}".format(self._message_bits))
         # Compute XOR checksum and append as 8 bits after message
-        checksum = TemporalCloakEncoding.compute_checksum(self._message_encoded)
-        checksum_bits = BitArray(uint=checksum, length=8)
+        self._checksum = TemporalCloakEncoding.compute_checksum(self._message_encoded)
+        checksum_bits = BitArray(uint=self._checksum, length=8)
         self._message_bits_padded = BitArray(self._message_bits)
         self._message_bits_padded.append(checksum_bits)
         self._message_bits_padded.prepend(self.BOUNDARY)
@@ -73,9 +74,91 @@ class TemporalCloakEncoding:
         print("Message bits with boundary: {}".format(self._message_bits_padded))
         self._build_delays()
 
+    @property
+    def checksum(self):
+        return self._checksum
+
     def _build_delays(self) -> None:
         """Override in subclasses to generate mode-specific delays."""
         pass
+
+    def debug_sections(self) -> list[dict]:
+        """Return an annotated list of signal-bit sections.
+
+        Each section is a dict with at minimum: label, bits, offset, length.
+        Subclasses override to insert mode-specific sections (e.g. key, length).
+        """
+        boundary = BitArray(self.BOUNDARY)
+        boundary_len = len(boundary)
+        checksum_bits = BitArray(uint=self._checksum, length=8)
+
+        sections = []
+        offset = 0
+
+        sections.append({
+            "label": "start_boundary",
+            "bits": boundary.bin,
+            "hex": boundary.hex,
+            "offset": offset,
+            "length": boundary_len,
+        })
+        offset += boundary_len
+
+        # Hook for subclass-specific preamble sections
+        extra, offset = self._debug_preamble_sections(offset)
+        sections.extend(extra)
+
+        sections.append({
+            "label": "message",
+            "bits": self._message_bits.bin,
+            "text": self._message,
+            "offset": offset,
+            "length": len(self._message_bits),
+        })
+        offset += len(self._message_bits)
+
+        sections.append({
+            "label": "checksum",
+            "bits": checksum_bits.bin,
+            "hex": checksum_bits.hex,
+            "value": self._checksum,
+            "offset": offset,
+            "length": 8,
+        })
+        offset += 8
+
+        sections.append({
+            "label": "end_boundary",
+            "bits": boundary.bin,
+            "hex": boundary.hex,
+            "offset": offset,
+            "length": boundary_len,
+        })
+
+        return sections
+
+    def debug_signal_bits(self) -> BitArray:
+        """Return the concatenated signal bits (no filler).
+
+        Subclasses override to include mode-specific preamble bits.
+        """
+        boundary = BitArray(self.BOUNDARY)
+        checksum_bits = BitArray(uint=self._checksum, length=8)
+        result = BitArray()
+        result.append(boundary)
+        result.append(self._debug_preamble_bits())
+        result.append(self._message_bits)
+        result.append(checksum_bits)
+        result.append(boundary)
+        return result
+
+    def _debug_preamble_sections(self, offset: int) -> tuple[list[dict], int]:
+        """Return extra preamble sections and updated offset. Override in subclasses."""
+        return [], offset
+
+    def _debug_preamble_bits(self) -> BitArray:
+        """Return extra preamble bits for signal concatenation. Override in subclasses."""
+        return BitArray()
 
     def __str__(self):
         result = "Message: '{}'\n".format(self.message)
@@ -162,13 +245,17 @@ class DistributedEncoder(TemporalCloakEncoding):
         return sorted(available[:num_remaining_bits])
 
     def generate_delays(self, image_size: int,
-                        chunk_size: int = TemporalCloakConst.CHUNK_SIZE_TORNADO) -> list:
+                        chunk_size: int = TemporalCloakConst.CHUNK_SIZE_TORNADO,
+                        key: int | None = None) -> list:
         """Generate the full delay list for distributed mode.
 
         Returns a list of length total_gaps where preamble delays occupy
         positions 0-31 (contiguous), message/checksum/end-boundary delays
         are placed at pseudo-random positions selected by a random key,
         and all other positions get neutral delay (BIT_1_TIME_DELAY).
+
+        If *key* is provided it is used directly; otherwise a random
+        8-bit key is generated.
         """
         if self._message_encoded is None:
             raise ValueError("Set the message property before calling generate_delays")
@@ -181,8 +268,9 @@ class DistributedEncoder(TemporalCloakEncoding):
 
         total_gaps = math.ceil(image_size / chunk_size) - 1
 
-        # Generate random key
-        key = random.randint(0, 255)
+        if key is None:
+            key = random.randint(0, 255)
+        self._dist_key = key
 
         # Build preamble bits: boundary (16) + key (8) + msg_len (8)
         preamble_bits = BitArray(self.BOUNDARY)
@@ -255,6 +343,40 @@ class DistributedEncoder(TemporalCloakEncoding):
                     + TemporalCloakConst.DIST_LENGTH_BITS)
         max_len = max(0, (available_slots - overhead) // 8)
         return min(max_len, TemporalCloakConst.MAX_DISTRIBUTED_MSG_LEN)
+
+    @property
+    def dist_key(self):
+        return self._dist_key
+
+    def _debug_preamble_sections(self, offset: int) -> tuple[list[dict], int]:
+        key_bits = BitArray(uint=self._dist_key, length=TemporalCloakConst.DIST_KEY_BITS)
+        msg_len_bits = BitArray(uint=len(self._message_encoded),
+                                length=TemporalCloakConst.DIST_LENGTH_BITS)
+        sections = [
+            {
+                "label": "dist_key",
+                "bits": key_bits.bin,
+                "value": self._dist_key,
+                "offset": offset,
+                "length": TemporalCloakConst.DIST_KEY_BITS,
+            },
+            {
+                "label": "dist_msg_length",
+                "bits": msg_len_bits.bin,
+                "value": len(self._message_encoded),
+                "offset": offset + TemporalCloakConst.DIST_KEY_BITS,
+                "length": TemporalCloakConst.DIST_LENGTH_BITS,
+            },
+        ]
+        new_offset = offset + TemporalCloakConst.DIST_KEY_BITS + TemporalCloakConst.DIST_LENGTH_BITS
+        return sections, new_offset
+
+    def _debug_preamble_bits(self) -> BitArray:
+        result = BitArray()
+        result.append(BitArray(uint=self._dist_key, length=TemporalCloakConst.DIST_KEY_BITS))
+        result.append(BitArray(uint=len(self._message_encoded),
+                               length=TemporalCloakConst.DIST_LENGTH_BITS))
+        return result
 
     def __repr__(self):
         return f"DistributedEncoder(message='{self.message}')"
