@@ -208,5 +208,182 @@ class TestEncodingEdgeCases(unittest.TestCase):
         self.assertEqual(DistributedEncoder.BOUNDARY, TemporalCloakConst.BOUNDARY_BITS_DISTRIBUTED)
 
 
+class TestChecksumProperty(unittest.TestCase):
+    """The checksum property should be accessible after setting a message."""
+
+    def test_checksum_matches_manual(self):
+        enc = FrontloadedEncoder()
+        enc.message = "hi"
+        expected = TemporalCloakEncoding.compute_checksum(b"hi")
+        self.assertEqual(enc.checksum, expected)
+
+    def test_checksum_updates_on_new_message(self):
+        enc = FrontloadedEncoder()
+        enc.message = "hi"
+        first = enc.checksum
+        enc.message = "bye"
+        self.assertEqual(enc.checksum, TemporalCloakEncoding.compute_checksum(b"bye"))
+        self.assertNotEqual(enc.checksum, first)
+
+
+class TestFrontloadedDebugSections(unittest.TestCase):
+    """debug_sections() for FrontloadedEncoder."""
+
+    def setUp(self):
+        self.enc = FrontloadedEncoder()
+        self.enc.message = "hi"
+        self.sections = self.enc.debug_sections()
+        self.labels = [s["label"] for s in self.sections]
+
+    def test_section_labels(self):
+        self.assertEqual(
+            self.labels,
+            ["start_boundary", "message", "checksum", "end_boundary"],
+        )
+
+    def test_no_distributed_sections(self):
+        self.assertNotIn("dist_key", self.labels)
+        self.assertNotIn("dist_msg_length", self.labels)
+
+    def test_boundary_hex(self):
+        boundary_hex = BitArray(TemporalCloakConst.BOUNDARY_BITS).hex
+        self.assertEqual(self.sections[0]["hex"], boundary_hex)
+        self.assertEqual(self.sections[-1]["hex"], boundary_hex)
+
+    def test_message_text(self):
+        msg_section = self.sections[1]
+        self.assertEqual(msg_section["text"], "hi")
+        self.assertEqual(msg_section["length"], 16)  # 2 chars * 8 bits
+
+    def test_checksum_value(self):
+        cs_section = self.sections[2]
+        self.assertEqual(cs_section["value"], self.enc.checksum)
+
+    def test_offsets_are_contiguous(self):
+        for s in self.sections:
+            # Each section should have offset and length
+            self.assertIn("offset", s)
+            self.assertIn("length", s)
+        # Offsets should be monotonically increasing
+        offsets = [s["offset"] for s in self.sections]
+        self.assertEqual(offsets, sorted(offsets))
+        # Each offset == previous offset + previous length
+        for i in range(1, len(self.sections)):
+            expected_offset = self.sections[i - 1]["offset"] + self.sections[i - 1]["length"]
+            self.assertEqual(self.sections[i]["offset"], expected_offset)
+
+
+class TestDistributedDebugSections(unittest.TestCase):
+    """debug_sections() for DistributedEncoder."""
+
+    def setUp(self):
+        self.enc = DistributedEncoder()
+        self.enc.message = "hi"
+        self.enc.generate_delays(100_000, key=42)
+        self.sections = self.enc.debug_sections()
+        self.labels = [s["label"] for s in self.sections]
+
+    def test_section_labels(self):
+        self.assertEqual(
+            self.labels,
+            ["start_boundary", "dist_key", "dist_msg_length",
+             "message", "checksum", "end_boundary"],
+        )
+
+    def test_boundary_uses_distributed_marker(self):
+        boundary_hex = BitArray(TemporalCloakConst.BOUNDARY_BITS_DISTRIBUTED).hex
+        self.assertEqual(self.sections[0]["hex"], boundary_hex)
+        self.assertEqual(self.sections[-1]["hex"], boundary_hex)
+
+    def test_dist_key_value(self):
+        key_section = next(s for s in self.sections if s["label"] == "dist_key")
+        self.assertEqual(key_section["value"], 42)
+        self.assertEqual(key_section["length"], TemporalCloakConst.DIST_KEY_BITS)
+
+    def test_dist_msg_length_value(self):
+        len_section = next(s for s in self.sections if s["label"] == "dist_msg_length")
+        self.assertEqual(len_section["value"], 2)  # len("hi")
+        self.assertEqual(len_section["length"], TemporalCloakConst.DIST_LENGTH_BITS)
+
+    def test_offsets_are_contiguous(self):
+        for i in range(1, len(self.sections)):
+            expected = self.sections[i - 1]["offset"] + self.sections[i - 1]["length"]
+            self.assertEqual(self.sections[i]["offset"], expected)
+
+
+class TestFrontloadedDebugSignalBits(unittest.TestCase):
+    """debug_signal_bits() for FrontloadedEncoder."""
+
+    def setUp(self):
+        self.enc = FrontloadedEncoder()
+        self.enc.message = "hi"
+        self.signal = self.enc.debug_signal_bits()
+
+    def test_starts_with_boundary(self):
+        boundary = BitArray(TemporalCloakConst.BOUNDARY_BITS)
+        self.assertEqual(self.signal[:len(boundary)], boundary)
+
+    def test_ends_with_boundary(self):
+        boundary = BitArray(TemporalCloakConst.BOUNDARY_BITS)
+        self.assertEqual(self.signal[-len(boundary):], boundary)
+
+    def test_length_matches_sections(self):
+        sections = self.enc.debug_sections()
+        total = sum(s["length"] for s in sections)
+        self.assertEqual(len(self.signal), total)
+
+    def test_matches_padded_bits(self):
+        """Signal bits should equal _message_bits_padded for frontloaded."""
+        self.assertEqual(self.signal, self.enc._message_bits_padded)
+
+
+class TestDistributedDebugSignalBits(unittest.TestCase):
+    """debug_signal_bits() for DistributedEncoder."""
+
+    def setUp(self):
+        self.enc = DistributedEncoder()
+        self.enc.message = "hi"
+        self.enc.generate_delays(100_000, key=99)
+        self.signal = self.enc.debug_signal_bits()
+
+    def test_starts_with_distributed_boundary(self):
+        boundary = BitArray(TemporalCloakConst.BOUNDARY_BITS_DISTRIBUTED)
+        self.assertEqual(self.signal[:len(boundary)], boundary)
+
+    def test_ends_with_distributed_boundary(self):
+        boundary = BitArray(TemporalCloakConst.BOUNDARY_BITS_DISTRIBUTED)
+        self.assertEqual(self.signal[-len(boundary):], boundary)
+
+    def test_contains_key_bits(self):
+        """Signal bits should contain the key after the start boundary."""
+        boundary = BitArray(TemporalCloakConst.BOUNDARY_BITS_DISTRIBUTED)
+        key_bits = BitArray(uint=99, length=TemporalCloakConst.DIST_KEY_BITS)
+        start = len(boundary)
+        end = start + TemporalCloakConst.DIST_KEY_BITS
+        self.assertEqual(self.signal[start:end], key_bits)
+
+    def test_length_matches_sections(self):
+        sections = self.enc.debug_sections()
+        total = sum(s["length"] for s in sections)
+        self.assertEqual(len(self.signal), total)
+
+
+class TestDistKeyProperty(unittest.TestCase):
+    """DistributedEncoder.dist_key should reflect the key used."""
+
+    def test_explicit_key_stored(self):
+        enc = DistributedEncoder()
+        enc.message = "test"
+        enc.generate_delays(100_000, key=77)
+        self.assertEqual(enc.dist_key, 77)
+
+    def test_random_key_in_range(self):
+        enc = DistributedEncoder()
+        enc.message = "test"
+        enc.generate_delays(100_000)
+        self.assertGreaterEqual(enc.dist_key, 0)
+        self.assertLessEqual(enc.dist_key, 255)
+
+
 if __name__ == '__main__':
     unittest.main()

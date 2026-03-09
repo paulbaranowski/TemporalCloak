@@ -18,7 +18,8 @@ class LinkStore:
         created_at     REAL NOT NULL,
         burn_after_reading INTEGER NOT NULL DEFAULT 0,
         delivered      INTEGER NOT NULL DEFAULT 0,
-        mode           TEXT NOT NULL DEFAULT 'distributed'
+        mode           TEXT NOT NULL DEFAULT 'distributed',
+        dist_key       INTEGER
     );
     """
 
@@ -39,6 +40,9 @@ class LinkStore:
         if "mode" not in columns:
             conn.execute("ALTER TABLE links ADD COLUMN mode TEXT NOT NULL DEFAULT 'distributed'")
             conn.commit()
+        if "dist_key" not in columns:
+            conn.execute("ALTER TABLE links ADD COLUMN dist_key INTEGER")
+            conn.commit()
 
     def _conn(self):
         """Return a per-thread SQLite connection."""
@@ -50,13 +54,13 @@ class LinkStore:
         return conn
 
     def create(self, link_id, message, image_path, image_filename, created_at,
-               burn_after_reading=False, mode="distributed"):
+               burn_after_reading=False, mode="distributed", dist_key=None):
         self._conn().execute(
             "INSERT INTO links "
-            "(link_id, message, image_path, image_filename, created_at, burn_after_reading, mode) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(link_id, message, image_path, image_filename, created_at, burn_after_reading, mode, dist_key) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (link_id, message, image_path, image_filename, created_at,
-             int(burn_after_reading), mode),
+             int(burn_after_reading), mode, dist_key),
         )
         self._conn().commit()
 
