@@ -18,7 +18,7 @@ class TemporalCloakDecoding:
     # DistributedDecoder: 16 (key + length follow boundary)
     _preamble_extra_bits = 0
 
-    def __init__(self, debug=False):
+    def __init__(self, debug=False, carry_forward=True, max_delay_margin=1.1):
         self._bits = BitStream()
         self._time_delays = []
         self._eom = None
@@ -30,6 +30,25 @@ class TemporalCloakDecoding:
         self._adaptive_threshold = None
         self._confidence_scores = []
         self._checksum_valid = None
+        self._carry = 0.0
+        self._carry_forward_enabled = carry_forward
+        self._max_expected_delay = TemporalCloakConst.BIT_0_TIME_DELAY * max_delay_margin
+
+    def _apply_carry(self, delay: float) -> float:
+        """Apply carry-forward compensation to a delay.
+
+        If the corrected delay exceeds max_expected, cap it and carry the
+        excess forward to be added to the next gap.
+        """
+        if not self._carry_forward_enabled:
+            return delay
+        corrected = delay + self._carry
+        if corrected > self._max_expected_delay:
+            self._carry = corrected - self._max_expected_delay
+            corrected = self._max_expected_delay
+        else:
+            self._carry = 0.0
+        return corrected
 
     @property
     def bits(self) -> BitStream:
@@ -57,18 +76,19 @@ class TemporalCloakDecoding:
 
     def add_bit_by_delay(self, delay: float) -> None:
         self._time_delays.append(delay)
+        corrected = self._apply_carry(delay)
         threshold = self.threshold
-        if delay <= threshold:
+        if corrected <= threshold:
             self.add_bit(1)
         else:
             self.add_bit(0)
         # Track confidence: how far the delay is from the decision boundary
-        distance = abs(delay - threshold)
+        distance = abs(corrected - threshold)
         confidence = min(distance / threshold, 1.0) if threshold > 0 else 1.0
         self._confidence_scores.append(confidence)
         if confidence < 0.2:
             self.log(f"Low confidence bit at index {len(self._bits)-1}: "
-                     f"delay={delay:.4f}s, threshold={threshold:.4f}s, confidence={confidence:.2f}")
+                     f"delay={corrected:.4f}s, threshold={threshold:.4f}s, confidence={confidence:.2f}")
 
     # @param bit must be 1 or 0
     def add_bit(self, bit: int) -> None:
@@ -140,13 +160,15 @@ class TemporalCloakDecoding:
         # Re-classify all bits with the calibrated threshold
         self._bits = BitStream()
         self._confidence_scores = []
+        self._carry = 0.0
         for delay in self._time_delays:
+            corrected = self._apply_carry(delay)
             threshold = self._adaptive_threshold
-            if delay <= threshold:
+            if corrected <= threshold:
                 self.add_bit(1)
             else:
                 self.add_bit(0)
-            distance = abs(delay - threshold)
+            distance = abs(corrected - threshold)
             confidence = min(distance / threshold, 1.0) if threshold > 0 else 1.0
             self._confidence_scores.append(confidence)
 
@@ -205,6 +227,7 @@ class TemporalCloakDecoding:
         Resets internal state to prepare for the next message.
         Override or attach a callback for custom display logic.
         """
+        self._carry = 0.0
         self.jump_to_next_message()
 
     def __str__(self):
@@ -223,6 +246,10 @@ class FrontloadedDecoder(TemporalCloakDecoding):
     """
 
     _preamble_extra_bits = 0
+
+    def __init__(self, debug=False, carry_forward=True, max_delay_margin=1.1):
+        super().__init__(debug=debug, carry_forward=carry_forward,
+                         max_delay_margin=max_delay_margin)
 
     def mark_time(self) -> float:
         current_time = time.monotonic()
@@ -253,8 +280,10 @@ class DistributedDecoder(TemporalCloakDecoding):
     _preamble_extra_bits = (TemporalCloakConst.DIST_KEY_BITS
                             + TemporalCloakConst.DIST_LENGTH_BITS)
 
-    def __init__(self, total_gaps: int, debug=False):
-        super().__init__(debug)
+    def __init__(self, total_gaps: int, debug=False, carry_forward=True,
+                 max_delay_margin=1.1):
+        super().__init__(debug=debug, carry_forward=carry_forward,
+                         max_delay_margin=max_delay_margin)
         self._total_gaps = total_gaps
         self._gap_index = 0
         self._bit_positions = None
@@ -305,7 +334,8 @@ class DistributedDecoder(TemporalCloakDecoding):
             # This gap carries a real bit
             self.add_bit_by_delay(time_diff)
         else:
-            # Filler gap — skip
+            # Filler gap — skip; reset carry to prevent stale carry leaking
+            self._carry = 0.0
             return time_diff
 
         # Don't try to decode until preamble is fully collected
@@ -336,9 +366,12 @@ class AutoDecoder:
     timing issues with time.monotonic()-based mark_time().
     """
 
-    def __init__(self, total_gaps: int, debug=False):
+    def __init__(self, total_gaps: int, debug=False, carry_forward=True,
+                 max_delay_margin=1.1):
         self._total_gaps = total_gaps
         self._debug = debug
+        self._carry_forward = carry_forward
+        self._max_delay_margin = max_delay_margin
         self._bootstrap_delays = []
         self._delegate = None
         self._mode = None
@@ -522,10 +555,16 @@ class AutoDecoder:
 
         if last_bit == 1:
             self._mode = "distributed"
-            self._delegate = DistributedDecoder(self._total_gaps, debug=self._debug)
+            self._delegate = DistributedDecoder(
+                self._total_gaps, debug=self._debug,
+                carry_forward=self._carry_forward,
+                max_delay_margin=self._max_delay_margin)
         else:
             self._mode = "frontloaded"
-            self._delegate = FrontloadedDecoder(debug=self._debug)
+            self._delegate = FrontloadedDecoder(
+                debug=self._debug,
+                carry_forward=self._carry_forward,
+                max_delay_margin=self._max_delay_margin)
 
         # Replay collected delays into the delegate directly via add_bit_by_delay.
         # This avoids timing issues since mark_time() uses time.monotonic().

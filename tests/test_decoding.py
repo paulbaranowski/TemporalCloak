@@ -315,5 +315,92 @@ class TestDecodingEdgeCases(unittest.TestCase):
         self.assertIsNone(result)
 
 
+class TestCarryForwardCompensation(unittest.TestCase):
+    """Verify carry-forward delay compensation caps oversized gaps and
+    redistributes excess to the next gap."""
+
+    def test_basic(self):
+        """Shifted delays: gap 2 is oversized (absorbed part of gap 3).
+        Carry-forward should cap gap 2 and add excess to gap 3, classifying
+        gap 3 correctly as 0."""
+        decoder = FrontloadedDecoder(carry_forward=True)
+        # Expected bits: 1, 0, 1 (delays: 0.0, 0.3, 0.0)
+        # Simulated shift: gap 2 gets extra 0.168s, gap 3 shrinks by same
+        # Result without carry: [0.001 → 1, 0.466 → 0, 0.001 → 1] (gap 3 wrong if it was meant to be 0)
+        # But let's test a case where shift actually flips a bit:
+        # Expected: 1, 0, 0 (delays: 0.0, 0.3, 0.3)
+        # Shifted:  0.001, 0.55, 0.05
+        # Without carry: 0.55 > 0.15 → 0 (ok), 0.05 < 0.15 → 1 (WRONG, should be 0)
+        # With carry: 0.55 capped at 0.33 (max_expected), carry=0.22
+        #             0.05 + 0.22 = 0.27 > 0.15 → 0 (CORRECT)
+        delays = [0.001, 0.55, 0.05]
+        for d in delays:
+            decoder.add_bit_by_delay(d)
+        # Bits should be: 1, 0, 0
+        self.assertEqual(decoder.bits, BitStream('0b100'))
+
+    def test_disabled(self):
+        """Same shifted delays with carry_forward=False should use raw delays."""
+        decoder = FrontloadedDecoder(carry_forward=False)
+        delays = [0.001, 0.55, 0.05]
+        for d in delays:
+            decoder.add_bit_by_delay(d)
+        # Without carry: 0.001→1, 0.55→0, 0.05→1
+        self.assertEqual(decoder.bits, BitStream('0b101'))
+
+    def test_clean_delays_unaffected(self):
+        """Normal delays (no jitter) should pass through unchanged."""
+        decoder = FrontloadedDecoder(carry_forward=True)
+        delays = [
+            TemporalCloakConst.BIT_1_TIME_DELAY,  # 0.0 → 1
+            TemporalCloakConst.BIT_0_TIME_DELAY,  # 0.3 → 0
+            TemporalCloakConst.BIT_1_TIME_DELAY,  # 0.0 → 1
+            TemporalCloakConst.BIT_0_TIME_DELAY,  # 0.3 → 0
+        ]
+        for d in delays:
+            decoder.add_bit_by_delay(d)
+        self.assertEqual(decoder.bits, BitStream('0b1010'))
+        # Carry should be zero after clean delays
+        self.assertAlmostEqual(decoder._carry, 0.0)
+
+    def test_carry_resets_on_completed(self):
+        """After a full message decode, carry should reset to 0."""
+        enc = FrontloadedEncoder()
+        enc.message = "AB"
+        decoder = FrontloadedDecoder(carry_forward=True)
+        # Inject a non-zero carry
+        decoder._carry = 0.1
+        for delay in enc.delays:
+            decoder.add_bit_by_delay(delay)
+        result, completed, _ = decoder.bits_to_message()
+        if completed:
+            decoder.on_completed(result)
+        self.assertAlmostEqual(decoder._carry, 0.0)
+
+    def test_end_to_end(self):
+        """Encode a message, simulate jitter by shifting delay between
+        adjacent gaps, decode with carry-forward, verify correct message."""
+        enc = FrontloadedEncoder()
+        enc.message = "Hi"
+        delays = list(enc.delays)
+
+        # Simulate TCP jitter: shift delay from gap i+1 to gap i
+        # Find a pair where gap[i] is a 0-bit (0.3) followed by a 1-bit (0.0)
+        # and shift some delay to make gap[i] oversized
+        shift_amount = 0.15
+        for i in range(len(delays) - 1):
+            if delays[i] > 0.1 and delays[i + 1] < 0.1:
+                delays[i] += shift_amount
+                delays[i + 1] = max(0.0, delays[i + 1] - shift_amount)
+                break
+
+        decoder = FrontloadedDecoder(carry_forward=True)
+        for d in delays:
+            decoder.add_bit_by_delay(d)
+        result, completed, _ = decoder.bits_to_message()
+        self.assertTrue(completed)
+        self.assertEqual(result, "Hi")
+
+
 if __name__ == '__main__':
     unittest.main()

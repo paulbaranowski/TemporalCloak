@@ -91,6 +91,63 @@ An 8-bit XOR checksum is computed over the raw payload bytes and appended after 
 
 For each classified bit, the decoder computes a confidence score based on how far the observed delay is from the decision threshold. Bits with confidence below 0.2 are logged as low-confidence, aiding in diagnostics.
 
+### Carry-Forward Delay Compensation
+
+**The problem:** Network jitter and TCP buffering can shift delay from one gap to the next. When one gap runs long, it effectively steals time from its neighbor — the total time across the two gaps is roughly conserved, but it lands on the wrong gap. This causes the oversized gap to be misclassified and can cascade into multiple flipped bits.
+
+**Example from production data:**
+
+In every observed case, the pattern is the same: an oversized delay on one gap is followed by an undersized delay on the next. The total time across the two gaps is roughly conserved, but it lands on the wrong gap.
+
+The server intended two consecutive `0` bits — delays of `[300ms, 300ms]`. What the client observed:
+
+```
+Gap A: Expected 0 (300ms) → Observed 490ms  ✓ (above midpoint, correct — but oversized)
+Gap B: Expected 0 (300ms) → Observed 110ms  ✗ (below midpoint, decoded as 1 — WRONG)
+```
+
+Gap A absorbed ~190ms of extra delay, stealing it from gap B. The 110ms observed at gap B falls below the midpoint (175ms) and is misclassified as `1`.
+
+**The mechanism:** The decoder knows the maximum intentional delay (`BIT_0_TIME_DELAY × max_delay_margin`). When a corrected delay exceeds this cap, the excess is carried forward and added to the next gap's measurement before classification. The cap is only used for carry-forward decisions — bit classification still uses the midpoint threshold.
+
+```python
+max_expected = server_config.bit_0_delay * 1.1   # 330ms with 10% margin
+carry = 0.0
+
+for each raw_delay in gaps:
+    corrected = raw_delay + carry
+    if corrected > max_expected:
+        carry = corrected - max_expected
+        corrected = max_expected
+    else:
+        carry = 0.0
+    classify_bit(corrected)              # uses midpoint threshold, not max_expected
+```
+
+**Walkthrough** (midpoint = 0.175s, max_expected = 0.330s):
+
+```
+Gap A: raw=0.490 + carry=0.000 = 0.490  → exceeds max_expected (0.330), cap it
+       corrected=0.330, carry=0.160
+       classify: 0.330 > 0.175 midpoint → bit 0 ✓
+
+Gap B: raw=0.110 + carry=0.160 = 0.270  → below max_expected, no new carry
+       carry=0.000
+       classify: 0.270 > 0.175 midpoint → bit 0 ✓  (was bit 1 without compensation)
+```
+
+Without carry-forward, gap B (110ms) falls below the 175ms midpoint and decodes as `1`. With carry-forward, the 160ms excess from gap A is added to gap B, bringing it to 270ms — correctly above the midpoint.
+
+**The effect:** In production, this pattern was observed at multiple points in a single transmission. Carry-forward corrects the undersized neighbor in each case, reducing bit errors per incident.
+
+**The limitation:** Carry-forward fixes the *receiving* gap (where excess delay accumulated) and can redistribute surplus to the next gap. But it cannot fix the *originating* gap (where delay was stolen from), because at that point the carry is still zero — we don't know delay was stolen until we see the oversized gap that follows.
+
+**In distributed mode**, carry is reset on filler gaps (gaps that don't carry message bits). This prevents stale carry values from leaking across non-adjacent message bits, since scattered bit positions may be separated by many filler gaps.
+
+**Configuration:** Carry-forward is controlled by two parameters on all decoder classes:
+- `carry_forward` (default: `True`) — enables or disables compensation
+- `max_delay_margin` (default: `1.1`) — multiplier on `BIT_0_TIME_DELAY` to set the cap
+
 ## Encoding Modes
 
 TemporalCloak supports two encoding modes that control how message bits are placed across chunk gaps:
@@ -349,7 +406,7 @@ TemporalCloak is best understood as a practical, production-style example of cov
 - **Real-world deployment**: Running as a systemd service on a public VPS with TLS termination
 - **Dual transmission modes**: Supporting both client-initiated (TCP sockets) and server-initiated (HTTP image transfers) covert communication
 - **Automatic mode detection**: Self-identifying encoding schemes through boundary marker analysis
-- **Robust error handling**: Adaptive threshold calibration and checksum validation for reliable operation over lossy networks
+- **Robust error handling**: Adaptive threshold calibration, carry-forward delay compensation, and checksum validation for reliable operation over lossy networks
 
 ### Contributions to the Field
 TemporalCloak advances covert timing channel research by providing a complete, deployable system that addresses practical challenges in real-world network environments. It demonstrates how timing steganography can achieve reliable communication while maintaining the covert nature that makes these channels difficult to detect.
