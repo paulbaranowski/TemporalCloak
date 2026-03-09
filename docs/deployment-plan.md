@@ -42,7 +42,7 @@ Timing constants now read from `TC_BIT_1_DELAY`, `TC_BIT_0_DELAY`, and `TC_MIDPO
 
 **Internet timing rationale:** Jitter is typically 10-50ms. A 250ms gap between bit values (50ms vs 300ms) provides enough margin for the adaptive threshold. These values should be validated after deployment (see Section 5).
 
-### 1.3 `demos/temporal_cloak_web_demo.py` — Production Server
+### 1.3 `demos/temporal_cloak_web.py` — Production Server
 
 Rewritten with:
 - **Routes:** `GET /api/image` (steganography), `GET /api/health` (monitoring), `GET /` (static landing page via `StaticFileHandler`)
@@ -52,16 +52,16 @@ Rewritten with:
 - **Logging** via Python `logging` module (replaces `print()`)
 - **Startup banner** logs bound address, port, and active timing constants
 
-### 1.4 `demos/temporal_cloak_cli_decoder.py` — CLI URL Argument
+### 1.4 CLI Decoder
 
-Accepts server URL as `sys.argv[1]`. Defaults to `http://localhost:8888/api/image` for local dev.
+The `temporal-cloak` CLI replaces the old `temporal_cloak_cli_decoder.py` script.
 
 ```bash
 # Local
-uv run python demos/temporal_cloak_cli_decoder.py
+uv run temporal-cloak decode http://localhost:8888/api/image
 
 # Production
-uv run python demos/temporal_cloak_cli_decoder.py https://yourdomain.com/api/image
+uv run temporal-cloak decode https://yourdomain.com/api/image
 ```
 
 ### 1.5 Quotes Encoding
@@ -86,8 +86,8 @@ Browser ──── HTTPS (443) ────────► Tornado (direct, no
                                      │                     (streams image with timing)
                                      └── GET /api/health → health check
 
-Client script ── HTTPS (443) ───► Tornado
-  (demos/temporal_cloak_cli_decoder.py)    └── GET /api/image  → decode timing from chunks
+Client CLI ──── HTTPS (443) ───► Tornado
+  (temporal-cloak decode)                    └── GET /api/image  → decode timing from chunks
 ```
 
 ### Why No Nginx/Reverse Proxy
@@ -229,7 +229,7 @@ Environment=TC_TLS_KEY=/etc/letsencrypt/live/yourdomain.com/privkey.pem
 Environment=TC_BIT_1_DELAY=0.05
 Environment=TC_BIT_0_DELAY=0.30
 Environment=TC_MIDPOINT=0.175
-ExecStart=/home/temporalcloak/.local/bin/uv run python demos/temporal_cloak_web_demo.py
+ExecStart=/home/temporalcloak/.local/bin/uv run python demos/temporal_cloak_web.py
 Restart=always
 RestartSec=5
 
@@ -257,9 +257,9 @@ sudo systemctl start temporalcloak
 uv run python -m unittest discover -s tests -v
 
 # Smoke test server locally
-uv run python demos/temporal_cloak_web_demo.py
+uv run python demos/temporal_cloak_web.py
 # In another terminal:
-uv run python demos/temporal_cloak_cli_decoder.py
+uv run temporal-cloak decode http://localhost:8888/api/image
 ```
 
 ### 6.2 Internet Timing Calibration
@@ -267,7 +267,7 @@ uv run python demos/temporal_cloak_cli_decoder.py
 After deploying to the VPS, run the client from your local machine:
 
 ```bash
-uv run python demos/temporal_cloak_cli_decoder.py https://yourdomain.com/api/image
+uv run temporal-cloak decode https://yourdomain.com/api/image
 ```
 
 Check:

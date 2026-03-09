@@ -28,7 +28,7 @@ Tests use the `unittest` stdlib module. There is a single test file (`test.py`) 
 
 **Demo 1** (raw TCP socket, client→server): start `python demo1_server.py`, then `python demo1_client.py`.
 
-**Demo 2** (Tornado HTTP, server→client): start `python temporal_cloak_web_demo.py`, then `python temporal_cloak_cli_decoder.py`. The server also serves images at http://localhost:8888.
+**Demo 2** (Tornado HTTP, server→client): start `python temporal_cloak_web.py`, then `temporal-cloak decode http://localhost:8888/api/image`. The server also serves images at http://localhost:8888.
 
 ## Architecture
 

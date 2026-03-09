@@ -38,13 +38,13 @@ The web server is based on Tornado.
 
 Start up the server:
 ```
-uv run python demos/temporal_cloak_web_demo.py
+uv run python demos/temporal_cloak_web.py
 ```
 Now you can go to http://localhost:8888 and see an image.
 
-Now run the client:
+Now run the CLI decoder:
 ```
-uv run python demos/temporal_cloak_cli_decoder.py
+uv run temporal-cloak decode http://localhost:8888/api/image
 ```
 
 ## Testing

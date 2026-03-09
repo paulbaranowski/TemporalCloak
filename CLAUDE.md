@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-TemporalCloak is a time-based steganography tool. It hides secret messages in the **timing delays** between data transmissions — not in the data content itself. Messages are encoded as bit sequences where each bit maps to a specific time delay (short delay = 1, longer delay = 0). A boundary marker (`0xFF00`) frames each message.
+TemporalCloak is a time-based steganography tool. It hides secret messages in the **timing delays** between data transmissions — not in the data content itself. Messages are encoded as bit sequences where each bit maps to a specific time delay (short delay = 1, longer delay = 0). A boundary marker frames each message.
 
 ## Commands
 
@@ -21,32 +21,55 @@ uv run python -m unittest tests.test_encoding -v
 # Run a single test method
 uv run python -m unittest tests.test_encoding.TestEncoding.test_encode_message -v
 
+# CLI tool (installed via pyproject.toml entry point)
+uv run temporal-cloak decode <URL>         # stream-decode a link's hidden message
+uv run temporal-cloak decode <URL> --debug # decode with raw debug output
+uv run temporal-cloak debug <URL>          # fetch server-side debug info (bit sections, signal)
+uv run temporal-cloak timing <FILE>        # analyze saved timing data JSON
+
 # Demo 1: Client sends hidden message to server via raw TCP sockets
 uv run python demos/demo1_server.py   # start first, listens on localhost:1234
 uv run python demos/demo1_client.py   # prompts for message, sends with timing encoding
 
 # Demo 2: Server embeds hidden message in HTTP image response (Tornado)
-uv run python demos/temporal_cloak_web_demo.py   # starts on localhost:8888
-uv run python demos/temporal_cloak_cli_decoder.py # decodes hidden quote from chunk timing
+uv run python demos/temporal_cloak_web.py   # starts on localhost:8888
+uv run temporal-cloak decode http://localhost:8888/api/image  # decode hidden quote
+
+# Benchmark: measure decode accuracy across many messages (server must be running)
+uv run python scripts/benchmark.py                          # 10 quotes, both modes
+uv run python scripts/benchmark.py --num-quotes 5 --verbose # detailed per-run output
+uv run python scripts/benchmark.py --mode frontloaded       # single mode
+uv run python scripts/benchmark.py --seed 42                # reproducible quote selection
 ```
 
 ## Architecture
 
+### Encoding Modes
+
+There are two encoding strategies, distinguished by how bits are placed across chunks:
+
+- **Frontloaded** — All message bits are packed into the first N chunks. Boundary marker: `0xFF00`. Simpler but detectable via timing analysis of early chunks.
+- **Distributed** — Bits are scattered across all chunks using a PRNG seed as a key. Boundary marker: `0xFF01`. Harder to detect but requires knowing total chunk count upfront.
+
+**Wire format:** `[BOUNDARY (16 bits)] [PREAMBLE*] [MESSAGE] [CHECKSUM (8 bits)] [BOUNDARY (16 bits)]`
+- Preamble: empty for frontloaded; key (8 bits) + length (8 bits) for distributed.
+- The last bit of the start boundary distinguishes mode (0 = frontloaded, 1 = distributed).
+
 ### Core Package (`temporal_cloak/`)
 
-- **TemporalCloakEncoding** (`encoding.py`) — Converts string → bit array → delay sequence. Prepends boundary bits. Used by senders.
-- **TemporalCloakDecoding** (`decoding.py`) — Reconstructs messages from timing: accumulates bits via `mark_time()`, finds boundary markers, decodes bit stream back to text. Used by receivers.
-- **TemporalCloakConst** (`const.py`) — Protocol constants (bit delays, midpoint threshold, boundary marker, chunk size). Timing values are configurable via `TC_BIT_1_DELAY`, `TC_BIT_0_DELAY`, `TC_MIDPOINT` env vars.
-- **TemporalCloakClient/Server** (`client.py`, `server.py`) — TCP socket client/server for Demo 1.
-- **QuoteProvider** (`quote_provider.py`) — Loads quotes from JSON, provides ASCII-safe random quotes.
+- **Encoding** (`encoding.py`) — `TemporalCloakEncoding` base class with `FrontloadedEncoder` and `DistributedEncoder` subclasses. Converts string → bit array → delay sequence. Encoders expose `debug_sections()` and `debug_signal_bits()` for introspection.
+- **Decoding** (`decoding.py`) — `TemporalCloakDecoding` base with `FrontloadedDecoder`, `DistributedDecoder`, and `AutoDecoder`. `AutoDecoder` detects mode from the last bit of the boundary marker, then delegates to the appropriate decoder. Accumulates bits via `mark_time()`, finds boundary markers, decodes bit stream back to text. Uses adaptive threshold calibration from boundary marker timing.
+- **Constants** (`const.py`) — `TemporalCloakConst`: protocol constants (bit delays, midpoint threshold, boundary marker, chunk size). Timing values configurable via `TC_BIT_1_DELAY`, `TC_BIT_0_DELAY`, `TC_MIDPOINT` env vars.
+- **CLI** (`cli.py`) — Click-based CLI with `decode`, `debug`, and `timing` commands. Uses Rich for rendering. Saves timing data to `data/timing/`.
+- **LinkStore** (`link_store.py`) — SQLite-backed storage for shareable links. DB location: `TC_DB_PATH` env var (default: `data/links.db`).
+- **QuoteProvider** (`quote_provider.py`) — Loads quotes from `content/quotes/quotes.json`.
 - **ImageProvider** (`image_provider.py`) — Provides random image files from `content/images/`.
-- **LinkStore** (`link_store.py`) — SQLite-backed storage for shareable links. DB location controlled by `TC_DB_PATH` env var (default: `data/links.db`). Schema has one `links` table with columns: `link_id`, `message`, `image_path`, `image_filename`, `created_at`, `burn_after_reading`, `delivered`.
 
 ### Configuration (`config.py` — top-level)
 
-Centralizes all deployment settings via env vars. Key vars: `TC_HOST`, `TC_PORT`, `TC_TLS_CERT`, `TC_TLS_KEY`, `TC_DB_PATH`. Imported by the web demo as `import config`.
+Centralizes deployment settings via env vars. Key vars: `TC_HOST`, `TC_PORT`, `TC_TLS_CERT`, `TC_TLS_KEY`, `TC_DB_PATH`. Imported by the web demo as `import config`.
 
-### Web Demo (`demos/temporal_cloak_web_demo.py`)
+### Web Demo (`demos/temporal_cloak_web.py`)
 
 Tornado-based HTTP server with these routes:
 
@@ -59,6 +82,7 @@ Tornado-based HTTP server with these routes:
 | `GET /api/link/<id>` | `LinkInfoHandler` | Link metadata (without revealing message) |
 | `GET /api/image/<id>` | `EncodedImageHandler` | Image with user's message encoded in timing |
 | `GET /api/image/<id>/normal` | `NormalImageHandler` | Image without timing encoding (for thumbnails) |
+| `GET /api/image/<id>/debug` | `DebugLinkHandler` | Server-side debug info: signal bits, bit sections, metadata |
 | `WS /api/decode/<id>` | `DecodeWebSocketHandler` | Real-time decode progress over WebSocket |
 | `GET /` | Static | Landing page from `static/` |
 
@@ -80,6 +104,7 @@ The encoding/decoding roles are swapped between demos: in Demo 1 the client enco
 
 - Messages are ASCII-only; `encode_message()` rejects non-ASCII with a `UnicodeEncodeError` check
 - `bitstring` library is used for bit-level operations (`BitArray`, `BitStream`, `Bits`)
-- Demo 2 uses Tornado's async `flush()` with `time.sleep` via executor for non-blocking delays
-- The quotes file (`content/quotes/quotes.json`) is UTF-8 encoded
+- Boundary markers (`0xFF00`/`0xFF01`) are chosen to never collide with ASCII payload bytes
+- Demo 2 uses Tornado's async `flush()` with `asyncio.sleep()` for non-blocking delays
 - All imports use package-qualified paths: `from temporal_cloak.encoding import TemporalCloakEncoding`
+- CLI entry point defined in pyproject.toml: `temporal-cloak = temporal_cloak.cli:cli`
