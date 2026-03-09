@@ -507,6 +507,59 @@ def debug_link(url):
 
 
 @cli.command()
+@click.option("--server", default="https://temporalcloak.cloud", help="Server base URL.")
+@click.option("--bit-1-delay", type=float, default=None, help="Delay for bit 1 (short delay).")
+@click.option("--bit-0-delay", type=float, default=None, help="Delay for bit 0 (long delay).")
+@click.option("--midpoint", type=float, default=None, help="Decision threshold between bit 1 and bit 0.")
+def config(server, bit_1_delay, bit_0_delay, midpoint):
+    """View or update the server's timing configuration.
+
+    With no options, displays the current config. With any delay options,
+    sends a PUT to update the values (partial updates are supported).
+    """
+    console = Console()
+    config_url = f"{server.rstrip('/')}/api/config"
+
+    updates = {}
+    if bit_1_delay is not None:
+        updates["bit_1_delay"] = bit_1_delay
+    if bit_0_delay is not None:
+        updates["bit_0_delay"] = bit_0_delay
+    if midpoint is not None:
+        updates["midpoint"] = midpoint
+
+    try:
+        if updates:
+            resp = requests.put(config_url, json=updates, timeout=10)
+        else:
+            resp = requests.get(config_url, timeout=10)
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        sys.exit(1)
+
+    data = resp.json()
+
+    if "error" in data:
+        console.print(f"[bold red]Error:[/bold red] {data['error']}")
+        sys.exit(1)
+
+    table = Table(show_header=False, border_style="dim", padding=(0, 1))
+    table.add_column("Key", style="dim", min_width=14)
+    table.add_column("Value")
+
+    table.add_row("bit_1_delay", f"{data['bit_1_delay']:.4f}s")
+    table.add_row("bit_0_delay", f"{data['bit_0_delay']:.4f}s")
+    table.add_row("midpoint", f"{data['midpoint']:.4f}s")
+
+    if updates:
+        console.print("[bold green]Config updated[/bold green]\n")
+    else:
+        console.print("[bold]Current config[/bold]\n")
+    console.print(table)
+
+
+@cli.command()
 @click.argument("file", type=click.Path(exists=True))
 @click.option("--limit", type=int, default=0, help="Max rows in per-bit table (0 = all).")
 def timing(file, limit):
