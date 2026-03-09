@@ -63,7 +63,6 @@ class TemporalCloakEncoding:
         self._delays = []
         _, self._message_encoded = TemporalCloakEncoding.encode_message(self._message)
         self._message_bits = BitArray(self._message_encoded)
-        print("Message bits: {}".format(self._message_bits))
         # Compute XOR checksum and append as 8 bits after message
         self._checksum = TemporalCloakEncoding.compute_checksum(self._message_encoded)
         checksum_bits = BitArray(uint=self._checksum, length=8)
@@ -71,7 +70,6 @@ class TemporalCloakEncoding:
         self._message_bits_padded.append(checksum_bits)
         self._message_bits_padded.prepend(self.BOUNDARY)
         self._message_bits_padded.append(self.BOUNDARY)
-        print("Message bits with boundary: {}".format(self._message_bits_padded))
         self._build_delays()
 
     @property
