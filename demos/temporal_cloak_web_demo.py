@@ -34,10 +34,19 @@ start_time = time.monotonic()
 link_store = LinkStore(config.DB_PATH)
 
 
+def _set_nodelay(handler):
+    """Disable Nagle's algorithm on the handler's connection for timing precision."""
+    try:
+        handler.request.connection.stream.set_nodelay(True)
+    except AttributeError:
+        pass
+
+
 class ImageHandler(tornado.web.RequestHandler):
     """Streams a random image with a hidden quote encoded in chunk timing."""
 
     async def get(self):
+        _set_nodelay(self)
         logger.info("Steganography request from %s", self.request.remote_ip)
         self.set_header("Content-Type", "image/jpeg")
 
@@ -64,9 +73,7 @@ class ImageHandler(tornado.web.RequestHandler):
                     delay = distributed_delays[gap_index]
                     gap_index += 1
                     if delay > 0:
-                        await tornado.ioloop.IOLoop.current().run_in_executor(
-                            None, time.sleep, delay
-                        )
+                        await asyncio.sleep(delay)
                 self.write(data)
                 try:
                     await self.flush()
@@ -247,6 +254,7 @@ class EncodedImageHandler(tornado.web.RequestHandler):
     """Serves image with timing-encoded hidden message for a specific link."""
 
     async def get(self, link_id):
+        _set_nodelay(self)
         link = link_store.get(link_id)
         if not link:
             self.set_status(404)
@@ -286,9 +294,7 @@ class EncodedImageHandler(tornado.web.RequestHandler):
                     delay = delays[gap_index]
                     gap_index += 1
                     if delay > 0:
-                        await tornado.ioloop.IOLoop.current().run_in_executor(
-                            None, time.sleep, delay
-                        )
+                        await asyncio.sleep(delay)
                 self.write(data)
                 try:
                     await self.flush()
