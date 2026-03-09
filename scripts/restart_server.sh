@@ -10,4 +10,4 @@ sleep 1
 
 cd "$PROJECT_DIR"
 echo "Starting server..."
-uv run python demos/temporal_cloak_web_demo.py
+uv run python demos/temporal_cloak_web.py

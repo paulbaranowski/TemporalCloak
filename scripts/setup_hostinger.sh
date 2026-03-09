@@ -142,7 +142,7 @@ Environment=TC_TLS_KEY=/etc/letsencrypt/live/$DOMAIN/privkey.pem
 Environment=TC_BIT_1_DELAY=0.05
 Environment=TC_BIT_0_DELAY=0.30
 Environment=TC_MIDPOINT=0.175
-ExecStart=/home/temporalcloak/.local/bin/uv run python demos/temporal_cloak_web_demo.py
+ExecStart=/home/temporalcloak/.local/bin/uv run python demos/temporal_cloak_web.py
 Restart=always
 RestartSec=5
 

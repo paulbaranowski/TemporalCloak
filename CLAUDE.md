@@ -32,8 +32,14 @@ uv run python demos/demo1_server.py   # start first, listens on localhost:1234
 uv run python demos/demo1_client.py   # prompts for message, sends with timing encoding
 
 # Demo 2: Server embeds hidden message in HTTP image response (Tornado)
-uv run python demos/temporal_cloak_web_demo.py   # starts on localhost:8888
-uv run python demos/temporal_cloak_cli_decoder.py # decodes hidden quote from chunk timing
+uv run python demos/temporal_cloak_web.py   # starts on localhost:8888
+uv run temporal-cloak decode http://localhost:8888/api/image  # decode hidden quote
+
+# Benchmark: measure decode accuracy across many messages (server must be running)
+uv run python scripts/benchmark.py                          # 10 quotes, both modes
+uv run python scripts/benchmark.py --num-quotes 5 --verbose # detailed per-run output
+uv run python scripts/benchmark.py --mode frontloaded       # single mode
+uv run python scripts/benchmark.py --seed 42                # reproducible quote selection
 ```
 
 ## Architecture
@@ -63,7 +69,7 @@ There are two encoding strategies, distinguished by how bits are placed across c
 
 Centralizes deployment settings via env vars. Key vars: `TC_HOST`, `TC_PORT`, `TC_TLS_CERT`, `TC_TLS_KEY`, `TC_DB_PATH`. Imported by the web demo as `import config`.
 
-### Web Demo (`demos/temporal_cloak_web_demo.py`)
+### Web Demo (`demos/temporal_cloak_web.py`)
 
 Tornado-based HTTP server with these routes:
 
