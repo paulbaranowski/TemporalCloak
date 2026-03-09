@@ -93,6 +93,74 @@ class ConfigHandler(tornado.web.RequestHandler):
             "midpoint": TemporalCloakConst.MIDPOINT_TIME,
         })
 
+    def put(self):
+        self.set_header("Content-Type", "application/json")
+        try:
+            body = tornado.escape.json_decode(self.request.body)
+        except Exception:
+            self.set_status(400)
+            self.write({"error": "Invalid JSON body"})
+            return
+
+        allowed_keys = {"bit_1_delay", "bit_0_delay", "midpoint"}
+        unknown_keys = set(body.keys()) - allowed_keys
+        if unknown_keys:
+            self.set_status(400)
+            self.write({"error": f"Unknown keys: {', '.join(sorted(unknown_keys))}"})
+            return
+
+        if not body:
+            self.set_status(400)
+            self.write({"error": "No values provided"})
+            return
+
+        # Validate types: each value must be a non-negative number
+        errors = []
+        for key in ("bit_1_delay", "bit_0_delay", "midpoint"):
+            if key in body:
+                val = body[key]
+                if not isinstance(val, (int, float)):
+                    errors.append(f"{key} must be a number")
+                elif val < 0:
+                    errors.append(f"{key} must be non-negative")
+
+        if errors:
+            self.set_status(400)
+            self.write({"error": "; ".join(errors)})
+            return
+
+        # Compute resulting values (merge provided with current)
+        bit_1 = float(body.get("bit_1_delay", TemporalCloakConst.BIT_1_TIME_DELAY))
+        bit_0 = float(body.get("bit_0_delay", TemporalCloakConst.BIT_0_TIME_DELAY))
+        midpoint = float(body.get("midpoint", TemporalCloakConst.MIDPOINT_TIME))
+
+        # Validate relationships
+        if bit_1 >= bit_0:
+            errors.append("bit_1_delay must be less than bit_0_delay")
+        if midpoint <= bit_1 or midpoint >= bit_0:
+            errors.append("midpoint must be between bit_1_delay and bit_0_delay")
+
+        if errors:
+            self.set_status(400)
+            self.write({"error": "; ".join(errors)})
+            return
+
+        # Apply changes
+        TemporalCloakConst.BIT_1_TIME_DELAY = bit_1
+        TemporalCloakConst.BIT_0_TIME_DELAY = bit_0
+        TemporalCloakConst.MIDPOINT_TIME = midpoint
+
+        logger.info(
+            "Timing config updated: bit_1=%.4f, bit_0=%.4f, midpoint=%.4f",
+            bit_1, bit_0, midpoint,
+        )
+
+        self.write({
+            "bit_1_delay": bit_1,
+            "bit_0_delay": bit_0,
+            "midpoint": midpoint,
+        })
+
 
 class HealthHandler(tornado.web.RequestHandler):
     def get(self):
