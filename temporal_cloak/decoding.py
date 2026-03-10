@@ -104,6 +104,8 @@ class TemporalCloakDecoding:
     @staticmethod
     def find_boundary(bits: BitStream, start_pos=0, boundary_hex=None) -> int:
         boundary = Bits(boundary_hex or TemporalCloakConst.BOUNDARY_BITS)
+        if start_pos >= len(bits):
+            return None
         # the "find" function returns a tuple which only has data in it if it was successful
         # it will return (<num>,) if it found something, otherwise ()
         pos = bits.find(boundary, start_pos)

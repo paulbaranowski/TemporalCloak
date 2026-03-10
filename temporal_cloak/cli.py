@@ -18,6 +18,7 @@ from rich.text import Text
 
 from temporal_cloak.const import TemporalCloakConst
 from temporal_cloak.decoding import AutoDecoder
+from temporal_cloak.metrics import compute_char_bit_errors
 
 DEFAULT_URL = "https://temporalcloak.cloud/api/image"
 
@@ -78,6 +79,17 @@ def _normalize_url(url):
             return f"{parsed.scheme}://{parsed.netloc}/api/image/{link_id}"
         return f"https://temporalcloak.cloud/api/image/{link_id}"
     return url
+
+
+def _styled_message(msg: str) -> Text:
+    """Render a decoded message with visible space indicators (·)."""
+    text = Text()
+    for ch in msg:
+        if ch == " ":
+            text.append("·", style="dim")
+        else:
+            text.append(ch, style="bold white")
+    return text
 
 
 class DecodeSession:
@@ -141,6 +153,7 @@ class DecodeSession:
 
         if self._debug:
             self._display_debug_stats()
+            self._display_server_comparison()
 
         self._save_timing_data()
 
@@ -299,7 +312,7 @@ class DecodeSession:
                 status = Text(" decoding... ", style="bold cyan")
                 border = "cyan"
 
-            msg_text = Text(current_message, style="bold white")
+            msg_text = _styled_message(current_message)
             panel = Panel(
                 msg_text,
                 title="Message",
@@ -390,6 +403,94 @@ class DecodeSession:
 
         self._console.print()
         self._console.print(table)
+
+    def _display_server_comparison(self):
+        """Fetch server debug info and display char bit error histogram."""
+        link_id = _extract_link_id(self._url)
+        if not link_id:
+            return
+
+        server_debug = self._fetch_server_debug(link_id)
+        if not server_debug:
+            self._console.print("\n[dim]Server debug info not available.[/dim]")
+            return
+
+        server_message = server_debug.get("message", "")
+        decoded_message = self._cloak.message if self._cloak else ""
+
+        if not server_message:
+            return
+
+        # Show original vs decoded
+        self._console.print()
+        cmp_table = Table(title="Message Comparison", show_header=False, border_style="dim")
+        cmp_table.add_column("", style="dim", min_width=12)
+        cmp_table.add_column("")
+        cmp_table.add_row("Original", _styled_message(server_message))
+        cmp_table.add_row("Decoded", _styled_message(decoded_message))
+        match = server_message == decoded_message
+        cmp_table.add_row("Match", Text("exact match", style="bold green") if match
+                          else Text("MISMATCH", style="bold red"))
+        self._console.print(cmp_table)
+
+        # Show char bit error histogram
+        char_errors = compute_char_bit_errors(decoded_message, server_message)
+        buckets = char_errors["buckets"]
+        if not buckets:
+            return
+
+        total_chars = char_errors["total_chars"]
+        self._console.print()
+        err_table = Table(title="Bit Errors Per Character", border_style="dim")
+        err_table.add_column("Bit Errors", justify="right", style="bold")
+        err_table.add_column("Chars", justify="right")
+        err_table.add_column("Pct", justify="right")
+        err_table.add_column("", width=30)
+
+        for errors in sorted(buckets.keys()):
+            count = buckets[errors]
+            pct = count / total_chars if total_chars else 0
+            bar = "#" * int(pct * 30)
+            style = "green" if errors == 0 else "yellow" if errors <= 2 else "red"
+            err_table.add_row(
+                str(errors), str(count), f"{pct:.1%}", Text(bar, style=style)
+            )
+        self._console.print(err_table)
+
+        # Show per-char detail for mismatched characters
+        mismatched = [(i, orig, dec, errs) for i, (orig, dec, errs)
+                      in enumerate(char_errors["per_char"]) if errs > 0]
+        if mismatched:
+            self._console.print()
+            detail = Table(title="Mismatched Characters", border_style="dim")
+            detail.add_column("Pos", justify="right", style="dim")
+            detail.add_column("Expected", justify="center")
+            detail.add_column("Got", justify="center")
+            detail.add_column("Bit Errors", justify="right")
+            detail.add_column("Expected Bits", style="dim")
+            detail.add_column("Got Bits", style="dim")
+            for pos, orig, dec, errs in mismatched:
+                orig_bits = format(ord(orig), "08b") if orig != "?" else "????????"
+                dec_bits = format(ord(dec), "08b") if dec != "?" else "????????"
+                # Highlight differing bits
+                orig_styled = Text()
+                dec_styled = Text()
+                for ob, db in zip(orig_bits, dec_bits):
+                    if ob != db:
+                        orig_styled.append(ob, style="bold red")
+                        dec_styled.append(db, style="bold red")
+                    else:
+                        orig_styled.append(ob, style="dim")
+                        dec_styled.append(db, style="dim")
+                detail.add_row(
+                    str(pos),
+                    repr(orig) if orig != "?" else "?",
+                    repr(dec) if dec != "?" else "?",
+                    str(errs),
+                    orig_styled,
+                    dec_styled,
+                )
+            self._console.print(detail)
 
 
 @click.group()
