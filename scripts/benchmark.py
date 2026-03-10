@@ -28,6 +28,7 @@ from rich.text import Text
 
 from temporal_cloak.const import TemporalCloakConst
 from temporal_cloak.decoding import AutoDecoder
+from temporal_cloak.metrics import compute_char_bit_errors
 from temporal_cloak.quote_provider import QuoteProvider
 
 console = Console()
@@ -35,40 +36,45 @@ console = Console()
 
 # ── Server helpers ──────────────────────────────────────────────────
 
-def health_check(base_url: str) -> None:
+def make_session() -> requests.Session:
+    """Create a requests session for connection reuse (avoids repeated TLS handshakes)."""
+    return requests.Session()
+
+
+def health_check(session: requests.Session, base_url: str) -> None:
     """Verify the server is reachable."""
     try:
-        resp = requests.get(f"{base_url}/api/health", timeout=5)
+        resp = session.get(f"{base_url}/api/health", timeout=15)
         resp.raise_for_status()
     except requests.RequestException as e:
         console.print(f"[bold red]Server unreachable:[/bold red] {e}")
         sys.exit(1)
 
 
-def pick_largest_image(base_url: str) -> str:
-    """Fetch image list and return the filename of the largest image."""
-    resp = requests.get(f"{base_url}/api/images", timeout=5)
+def pick_smallest_image(session: requests.Session, base_url: str) -> str:
+    """Fetch image list and return the filename of the smallest image."""
+    resp = session.get(f"{base_url}/api/images", timeout=15)
     resp.raise_for_status()
     images = resp.json()
     if not images:
         console.print("[bold red]No images available on server.[/bold red]")
         sys.exit(1)
-    largest = max(images, key=lambda img: img.get("size", 0))
-    return largest["filename"]
+    smallest = min(images, key=lambda img: img.get("size", 0))
+    return smallest["filename"]
 
 
-def create_link(base_url: str, message: str, image: str, mode: str) -> str:
+def create_link(session: requests.Session, base_url: str, message: str, image: str, mode: str) -> str:
     """POST /api/create and return the link ID."""
-    resp = requests.post(
+    resp = session.post(
         f"{base_url}/api/create",
         json={"message": message, "image": image, "mode": mode},
-        timeout=10,
+        timeout=30,
     )
     resp.raise_for_status()
     return resp.json()["id"]
 
 
-def decode_link(base_url: str, link_id: str,
+def decode_link(session: requests.Session, base_url: str, link_id: str,
                 on_chunk=None) -> dict:
     """Stream-decode an image link and return raw decode results.
 
@@ -78,7 +84,7 @@ def decode_link(base_url: str, link_id: str,
     url = f"{base_url}/api/image/{link_id}"
     chunk_size = TemporalCloakConst.CHUNK_SIZE_TORNADO
 
-    response = requests.get(url, stream=True, timeout=60)
+    response = session.get(url, stream=True, timeout=120)
     response.raise_for_status()
 
     content_length = int(response.headers.get("Content-Length", 0))
@@ -123,38 +129,41 @@ def decode_link(base_url: str, link_id: str,
     }
 
 
-def fetch_debug(base_url: str, link_id: str) -> dict:
+def fetch_debug(session: requests.Session, base_url: str, link_id: str) -> dict:
     """GET /api/image/<id>/debug for server ground truth."""
-    resp = requests.get(f"{base_url}/api/image/{link_id}/debug", timeout=10)
+    resp = session.get(f"{base_url}/api/image/{link_id}/debug", timeout=60)
     resp.raise_for_status()
     return resp.json()
 
 
 # ── Metric computation ──────────────────────────────────────────────
 
-def compute_bit_error_rate(client_bits_hex: str, client_bit_count: int,
-                           server_signal_bits: str) -> dict:
-    """Compare client-observed bits against server signal bits."""
-    if not client_bits_hex or not server_signal_bits:
+def compute_bit_error_rate(decoded_msg: str, original_msg: str) -> dict:
+    """Compare decoded vs original message at the bit level."""
+    if not decoded_msg or not original_msg:
         return {"bit_error_rate": None, "mismatch_count": 0, "compare_len": 0}
 
-    client_bits = bin(int(client_bits_hex, 16))[2:].zfill(len(client_bits_hex) * 4)
-    if client_bit_count and client_bit_count < len(client_bits):
-        client_bits = client_bits[:client_bit_count]
+    decoded_bits = "".join(format(ord(c), "08b") for c in decoded_msg)
+    original_bits = "".join(format(ord(c), "08b") for c in original_msg)
 
-    compare_len = min(len(server_signal_bits), len(client_bits))
+    compare_len = min(len(decoded_bits), len(original_bits))
     if compare_len == 0:
         return {"bit_error_rate": None, "mismatch_count": 0, "compare_len": 0}
 
     mismatches = sum(
         1 for i in range(compare_len)
-        if server_signal_bits[i] != client_bits[i]
+        if decoded_bits[i] != original_bits[i]
     )
+    # Missing or extra bits count as errors too
+    length_diff = abs(len(decoded_bits) - len(original_bits))
+    total_bits = max(len(decoded_bits), len(original_bits))
+
     return {
-        "bit_error_rate": mismatches / compare_len,
-        "mismatch_count": mismatches,
-        "compare_len": compare_len,
+        "bit_error_rate": (mismatches + length_diff) / total_bits,
+        "mismatch_count": mismatches + length_diff,
+        "compare_len": total_bits,
     }
+
 
 
 def compute_char_error_rate(decoded: str, original: str) -> float:
@@ -172,13 +181,11 @@ def compute_char_error_rate(decoded: str, original: str) -> float:
 def build_run_data(result: dict, debug: dict, mode: str) -> dict:
     """Combine decode result + server debug into a single run record."""
     server_message = debug.get("message", "")
-    server_signal_bits = debug.get("signal_bits", "")
-
-    bit_info = compute_bit_error_rate(
-        result["bits_hex"], result["bit_count"], server_signal_bits
-    )
 
     decoded_msg = result["message"]
+
+    bit_info = compute_bit_error_rate(decoded_msg, server_message)
+    char_bit_errors = compute_char_bit_errors(decoded_msg, server_message)
     exact_match = decoded_msg == server_message
     char_error_rate = compute_char_error_rate(decoded_msg, server_message)
 
@@ -204,6 +211,7 @@ def build_run_data(result: dict, debug: dict, mode: str) -> dict:
         "mismatch_count": bit_info["mismatch_count"],
         "compare_len": bit_info["compare_len"],
         "char_error_rate": char_error_rate,
+        "char_bit_error_buckets": char_bit_errors["buckets"],
         "confidence": conf_stats,
         "threshold": result["threshold"],
         "elapsed_seconds": result["elapsed_seconds"],
@@ -242,20 +250,32 @@ def build_live_display(progress, tally, completed_runs, verbose) -> Group:
                     show_edge=False)
         tbl.add_column("#", style="dim", width=4, justify="right")
         tbl.add_column("Result", width=6, justify="center")
-        tbl.add_column("Mode", width=12)
+        tbl.add_column("Mode", width=5)
         tbl.add_column("BER", width=8, justify="right")
-        tbl.add_column("Conf", width=6, justify="right")
+        tbl.add_column("bit/s", width=6, justify="right")
         tbl.add_column("Time", width=7, justify="right")
-        tbl.add_column("Message", overflow="ellipsis", max_width=42, no_wrap=True)
+        tbl.add_column("Char Err", width=14, justify="left")
+        tbl.add_column("Expected", overflow="fold")
+        tbl.add_column("Decoded", overflow="fold")
 
         for entry in recent:
             idx, run = entry
             status = Text("PASS", style="green") if run["exact_match"] else Text("FAIL", style="bold red")
-            ber = f"{run['bit_error_rate']:.4f}" if run["bit_error_rate"] is not None else "n/a"
-            conf = f"{run['confidence'].get('mean', 0):.2f}"
-            t = f"{run['elapsed_seconds']:.1f}s"
-            msg = run["original_message"][:42]
-            tbl.add_row(str(idx), status, run["mode_requested"], ber, conf, t, msg)
+            ber = f"{run['bit_error_rate']:.1%}" if run["bit_error_rate"] is not None else "n/a"
+            elapsed = run["elapsed_seconds"]
+            bps = f"{run['bit_count'] / elapsed:.1f}" if elapsed > 0 else "n/a"
+            t = f"{elapsed:.1f}s"
+            mode_short = "distr" if run["mode_requested"] == "distributed" else "frnt"
+            # Compact char bit error summary: "0:N 1:N 2:N"
+            buckets = run.get("char_bit_error_buckets", {})
+            char_err_parts = []
+            for errs in sorted(buckets.keys()):
+                if buckets[errs] > 0:
+                    char_err_parts.append(f"{errs}:{buckets[errs]}")
+            char_err = " ".join(char_err_parts) if char_err_parts else "n/a"
+            expected = run["original_message"]
+            decoded = run["decoded_message"]
+            tbl.add_row(str(idx), status, mode_short, ber, bps, t, char_err, expected, decoded)
 
         parts.append(tbl)
 
@@ -283,9 +303,19 @@ def aggregate_runs(runs: list[dict], label: str) -> dict:
     elapsed = [r["elapsed_seconds"] for r in runs]
     sorted_elapsed = sorted(elapsed)
 
+    bps_values = [r["bit_count"] / r["elapsed_seconds"]
+                  for r in runs if r["elapsed_seconds"] > 0]
+
     mode_correct = sum(
         1 for r in runs if r["mode_detected"] == r["mode_requested"]
     )
+
+    # Aggregate char bit error buckets across all runs
+    agg_char_buckets = {}
+    for r in runs:
+        for errors_str, count in r.get("char_bit_error_buckets", {}).items():
+            errors = int(errors_str) if isinstance(errors_str, str) else errors_str
+            agg_char_buckets[errors] = agg_char_buckets.get(errors, 0) + count
 
     def percentile(sorted_list, p):
         if not sorted_list:
@@ -311,12 +341,16 @@ def aggregate_runs(runs: list[dict], label: str) -> dict:
             "q25": percentile(sorted(all_conf_means), 0.25) if all_conf_means else None,
             "q75": percentile(sorted(all_conf_means), 0.75) if all_conf_means else None,
         },
+        "bits_per_sec": {
+            "mean": statistics.mean(bps_values) if bps_values else None,
+        },
         "elapsed_seconds": {
             "mean": statistics.mean(elapsed) if elapsed else None,
             "median": statistics.median(elapsed) if elapsed else None,
             "p95": percentile(sorted_elapsed, 0.95),
         },
         "mode_detection_accuracy": mode_correct / n,
+        "char_bit_error_buckets": agg_char_buckets,
     }
 
 
@@ -328,31 +362,57 @@ def print_summary(aggregates: list[dict]) -> None:
     table.add_column("Success", justify="right")
     table.add_column("Exact Match", justify="right")
     table.add_column("BER", justify="right")
-    table.add_column("Conf Mean", justify="right")
+    table.add_column("Avg bit/s", justify="right")
     table.add_column("Avg Time", justify="right")
 
     for agg in aggregates:
         if agg["count"] == 0:
             continue
         ber = agg["bit_error_rate"]
-        conf = agg["confidence"]
         elapsed = agg["elapsed_seconds"]
 
-        ber_str = f"{ber['mean']:.4f}" if ber["mean"] is not None else "n/a"
-        conf_str = f"{conf['mean']:.2f}" if conf["mean"] is not None else "n/a"
+        ber_str = f"{ber['mean']:.1%}" if ber["mean"] is not None else "n/a"
+        bps_str = f"{agg['bits_per_sec']['mean']:.1f}" if agg.get("bits_per_sec", {}).get("mean") is not None else "n/a"
         elapsed_str = f"{elapsed['mean']:.1f}s" if elapsed["mean"] is not None else "n/a"
+        mode_label = agg["label"].replace("distributed", "distr").replace("frontloaded", "frnt")
 
         table.add_row(
-            agg["label"],
+            mode_label,
             str(agg["count"]),
             f"{agg['success_rate']:.0%}",
             f"{agg['exact_match_rate']:.0%}",
             ber_str,
-            conf_str,
+            bps_str,
             elapsed_str,
         )
 
     console.print(table)
+
+    # Print char bit error histogram
+    for agg in aggregates:
+        buckets = agg.get("char_bit_error_buckets", {})
+        if not buckets:
+            continue
+        total_chars = sum(buckets.values())
+        err_table = Table(
+            title=f"Bit Errors Per Character — {agg['label']}",
+            border_style="dim",
+        )
+        err_table.add_column("Bit Errors", justify="right", style="bold")
+        err_table.add_column("Chars", justify="right")
+        err_table.add_column("Pct", justify="right")
+        err_table.add_column("", width=30)
+
+        for errors in sorted(buckets.keys()):
+            count = buckets[errors]
+            pct = count / total_chars if total_chars else 0
+            bar = "#" * int(pct * 30)
+            style = "green" if errors == 0 else "yellow" if errors <= 2 else "red"
+            err_table.add_row(
+                str(errors), str(count), f"{pct:.1%}", Text(bar, style=style)
+            )
+
+        console.print(err_table)
 
 
 # ── Main ────────────────────────────────────────────────────────────
@@ -379,14 +439,16 @@ def main(base_url, num_quotes, run_mode, output_path, seed, verbose):
         console.print(f"Seed: {seed}")
     console.print()
 
+    session = make_session()
+
     # 1. Health check
     console.print("[dim]Checking server health...[/dim]", end=" ")
-    health_check(base_url)
+    health_check(session, base_url)
     console.print("[green]ok[/green]")
 
-    # 2. Pick largest image
+    # 2. Pick smallest image (fewer chunks = faster benchmark runs)
     console.print("[dim]Fetching image list...[/dim]", end=" ")
-    image = pick_largest_image(base_url)
+    image = pick_smallest_image(session, base_url)
     console.print(f"[green]{image}[/green]")
 
     # 3. Load quotes
@@ -394,7 +456,8 @@ def main(base_url, num_quotes, run_mode, output_path, seed, verbose):
     if seed is not None:
         random.seed(seed)
     provider = QuoteProvider()
-    quotes = [provider.get_encodable_quote() for _ in range(num_quotes)]
+    max_len = 50
+    quotes = [provider.get_encodable_quote()[:max_len] for _ in range(num_quotes)]
     console.print(f"[green]{len(quotes)} encodable quotes selected[/green]")
     console.print()
 
@@ -437,7 +500,11 @@ def main(base_url, num_quotes, run_mode, output_path, seed, verbose):
                     step=f"creating link: {short_msg}",
                 )
                 live.update(build_live_display(progress, tally, completed_runs, verbose))
-                link_id = create_link(base_url, quote, image, mode)
+                link_id = create_link(session, base_url, quote, image, mode)
+
+                # Print link URL above the live display so it persists
+                link_url = f"{base_url}/api/image/{link_id}"
+                live.console.print(f"  [dim]{run_index}.[/dim] {link_url}")
 
                 # Step 2: Stream & decode
                 def on_chunk(gap_count, total_gaps, decoder):
@@ -455,12 +522,12 @@ def main(base_url, num_quotes, run_mode, output_path, seed, verbose):
 
                 progress.update(overall_task, step=f"streaming {link_id}...")
                 live.update(build_live_display(progress, tally, completed_runs, verbose))
-                result = decode_link(base_url, link_id, on_chunk=on_chunk)
+                result = decode_link(session, base_url, link_id, on_chunk=on_chunk)
 
                 # Step 3: Fetch debug
                 progress.update(overall_task, step="fetching server debug...")
                 live.update(build_live_display(progress, tally, completed_runs, verbose))
-                debug = fetch_debug(base_url, link_id)
+                debug = fetch_debug(session, base_url, link_id)
 
                 # Step 4: Compare
                 progress.update(overall_task, step="comparing...")
