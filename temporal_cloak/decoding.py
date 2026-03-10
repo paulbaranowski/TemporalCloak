@@ -18,7 +18,8 @@ class TemporalCloakDecoding:
     # DistributedDecoder: 16 (key + length follow boundary)
     _preamble_extra_bits = 0
 
-    def __init__(self, debug=False, carry_forward=True, max_delay_margin=1.1):
+    def __init__(self, debug=False, carry_forward=True, max_delay_margin=1.1,
+                 max_carry_fraction=0.5):
         self._bits = BitStream()
         self._time_delays = []
         self._eom = None
@@ -33,18 +34,24 @@ class TemporalCloakDecoding:
         self._carry = 0.0
         self._carry_forward_enabled = carry_forward
         self._max_expected_delay = TemporalCloakConst.BIT_0_TIME_DELAY * max_delay_margin
+        self._max_carry_fraction = max_carry_fraction
 
     def _apply_carry(self, delay: float) -> float:
         """Apply carry-forward compensation to a delay.
 
         If the corrected delay exceeds max_expected, cap it and carry the
-        excess forward to be added to the next gap.
+        excess forward to be added to the next gap.  Carry is clamped to
+        ``threshold * max_carry_fraction`` so that a single oversized gap
+        cannot accumulate enough carry to flip a subsequent clean bit.
         """
         if not self._carry_forward_enabled:
             return delay
         corrected = delay + self._carry
         if corrected > self._max_expected_delay:
             self._carry = corrected - self._max_expected_delay
+            max_carry = self.threshold * self._max_carry_fraction
+            if self._carry > max_carry:
+                self._carry = max_carry
             corrected = self._max_expected_delay
         else:
             self._carry = 0.0
@@ -115,6 +122,21 @@ class TemporalCloakDecoding:
         return begin_pos
 
     @staticmethod
+    def find_boundary_fuzzy(bits: BitStream, start_pos=0, boundary_hex=None,
+                            max_errors=2) -> int:
+        """Find a boundary marker allowing up to max_errors bit mismatches."""
+        boundary = BitArray(boundary_hex or TemporalCloakConst.BOUNDARY_BITS)
+        boundary_len = len(boundary)
+        if start_pos + boundary_len > len(bits):
+            return None
+        for pos in range(start_pos, len(bits) - boundary_len + 1):
+            candidate = bits[pos:pos + boundary_len]
+            hamming = (candidate ^ boundary).count(1)
+            if hamming <= max_errors:
+                return pos
+        return None
+
+    @staticmethod
     def verify_checksum(payload_bits, checksum_bits) -> bool:
         """Verify the 8-bit XOR checksum against the payload."""
         payload_bytes = payload_bits.tobytes()
@@ -135,14 +157,9 @@ class TemporalCloakDecoding:
             else:
                 self._checksum_valid = True
             message = payload_bits
-        else:
-            self._checksum_valid = None
 
         message_bytes = message.tobytes()
-        try:
-            decoded_message = message_bytes.decode('ascii')
-        except UnicodeDecodeError:
-            return ""
+        decoded_message = message_bytes.decode('ascii', errors='surrogateescape')
         self.log(decoded_message)
         return decoded_message
 
@@ -181,6 +198,12 @@ class TemporalCloakDecoding:
 
         completed = False
         begin_pos = TemporalCloakDecoding.find_boundary(self._bits, boundary_hex=self.BOUNDARY)
+        # Also try fuzzy — a corrupted start boundary may exist earlier than
+        # the exact match (which could be the intact end boundary instead).
+        fuzzy_begin = TemporalCloakDecoding.find_boundary_fuzzy(
+            self._bits, boundary_hex=self.BOUNDARY, max_errors=2)
+        if fuzzy_begin is not None and (begin_pos is None or fuzzy_begin < begin_pos):
+            begin_pos = fuzzy_begin
         if begin_pos is None:
             self._eom = None
             return "", False, None
@@ -188,6 +211,20 @@ class TemporalCloakDecoding:
         # Skip any extra preamble bits (e.g. key + length in distributed mode)
         begin_pos += self._preamble_extra_bits
         end_pos = TemporalCloakDecoding.find_boundary(self._bits, begin_pos, boundary_hex=self.BOUNDARY)
+        if end_pos is None:
+            # Fallback: fuzzy match for a corrupted end boundary.
+            # Only accept if the resulting payload is byte-aligned and passes checksum.
+            fuzzy_pos = TemporalCloakDecoding.find_boundary_fuzzy(
+                self._bits, begin_pos, boundary_hex=self.BOUNDARY, max_errors=2)
+            while fuzzy_pos is not None:
+                candidate = self._bits[begin_pos:fuzzy_pos]
+                if (len(candidate) > 8 and len(candidate) % 8 == 0
+                        and self.verify_checksum(candidate[:-8], candidate[-8:])):
+                    end_pos = fuzzy_pos
+                    break
+                # Try the next fuzzy match
+                fuzzy_pos = TemporalCloakDecoding.find_boundary_fuzzy(
+                    self._bits, fuzzy_pos + 1, boundary_hex=self.BOUNDARY, max_errors=2)
         if end_pos is not None:
             completed = True
             self._eom = end_pos
@@ -223,14 +260,70 @@ class TemporalCloakDecoding:
         """Record a timing gap and decode. Subclasses override for mode-specific logic."""
         raise NotImplementedError("Use FrontloadedDecoder or DistributedDecoder")
 
-    def on_completed(self, decode_attempt: str) -> None:
-        """Called when a complete message is decoded.
+    def try_correct_low_confidence_bits(self, max_flips=8):
+        """Attempt to correct the message by flipping low-confidence bits.
 
-        Resets internal state to prepare for the next message.
-        Override or attach a callback for custom display logic.
+        Takes the ``max_flips`` lowest-confidence bits as candidates and tries
+        single flips then pairs.  The checksum validates each attempt, so no
+        confidence threshold is needed — the checksum is the authority.
+
+        Returns (corrected_message, flipped_indices) if a flip produces a valid
+        checksum, or (None, []) if no correction succeeds.  Original bits are
+        restored when no correction is found.
         """
+        original_bits = BitArray(self._bits)
+
+        candidates = sorted(
+            enumerate(self._confidence_scores),
+            key=lambda x: x[1],
+        )[:max_flips]
+
+        if not candidates:
+            return None, []
+
+        original_checksum_valid = self._checksum_valid
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+
+            # Try single flips
+            for bit_idx, _conf in candidates:
+                self._bits = BitStream(original_bits)
+                self._bits.invert(bit_idx)
+                msg, completed, _ = self.bits_to_message()
+                if completed and self._checksum_valid:
+                    return msg, [bit_idx]
+
+            # Try pairs of flips
+            for i in range(len(candidates)):
+                for j in range(i + 1, len(candidates)):
+                    self._bits = BitStream(original_bits)
+                    self._bits.invert(candidates[i][0])
+                    self._bits.invert(candidates[j][0])
+                    msg, completed, _ = self.bits_to_message()
+                    if completed and self._checksum_valid:
+                        return msg, [candidates[i][0], candidates[j][0]]
+
+            # Try triples of flips
+            for i in range(len(candidates)):
+                for j in range(i + 1, len(candidates)):
+                    for k in range(j + 1, len(candidates)):
+                        self._bits = BitStream(original_bits)
+                        self._bits.invert(candidates[i][0])
+                        self._bits.invert(candidates[j][0])
+                        self._bits.invert(candidates[k][0])
+                        msg, completed, _ = self.bits_to_message()
+                        if completed and self._checksum_valid:
+                            return msg, [candidates[i][0], candidates[j][0], candidates[k][0]]
+
+        # Restore original state
+        self._bits = BitStream(original_bits)
+        self._checksum_valid = original_checksum_valid
+        return None, []
+
+    def on_completed(self, decode_attempt: str) -> None:
+        """Called when a complete message is decoded."""
         self._carry = 0.0
-        self.jump_to_next_message()
 
     def __str__(self):
         result = "Current bits: '{}'\n".format(self._bits)
@@ -249,9 +342,11 @@ class FrontloadedDecoder(TemporalCloakDecoding):
 
     _preamble_extra_bits = 0
 
-    def __init__(self, debug=False, carry_forward=True, max_delay_margin=1.1):
+    def __init__(self, debug=False, carry_forward=True, max_delay_margin=1.1,
+                 max_carry_fraction=0.5):
         super().__init__(debug=debug, carry_forward=carry_forward,
-                         max_delay_margin=max_delay_margin)
+                         max_delay_margin=max_delay_margin,
+                         max_carry_fraction=max_carry_fraction)
 
     def mark_time(self) -> float:
         current_time = time.monotonic()
@@ -269,6 +364,19 @@ class FrontloadedDecoder(TemporalCloakDecoding):
         return f"FrontloadedDecoder(bits='{self._bits}', completed='{self._completed}')"
 
 
+class StreamingFrontloadedDecoder(FrontloadedDecoder):
+    """FrontloadedDecoder with multi-message support.
+
+    Overrides on_completed() to truncate the bit stream after each message,
+    preparing the buffer for subsequent messages on the same connection.
+    Used by Demo 1's raw TCP socket server.
+    """
+
+    def on_completed(self, decode_attempt: str) -> None:
+        super().on_completed(decode_attempt)
+        self.jump_to_next_message()
+
+
 class DistributedDecoder(TemporalCloakDecoding):
     """Decodes messages with bits scattered across chunks via a PRNG key.
 
@@ -283,9 +391,10 @@ class DistributedDecoder(TemporalCloakDecoding):
                             + TemporalCloakConst.DIST_LENGTH_BITS)
 
     def __init__(self, total_gaps: int, debug=False, carry_forward=True,
-                 max_delay_margin=1.1):
+                 max_delay_margin=1.1, max_carry_fraction=0.5):
         super().__init__(debug=debug, carry_forward=carry_forward,
-                         max_delay_margin=max_delay_margin)
+                         max_delay_margin=max_delay_margin,
+                         max_carry_fraction=max_carry_fraction)
         self._total_gaps = total_gaps
         self._gap_index = 0
         self._bit_positions = None
@@ -369,11 +478,12 @@ class AutoDecoder:
     """
 
     def __init__(self, total_gaps: int, debug=False, carry_forward=True,
-                 max_delay_margin=1.1):
+                 max_delay_margin=1.1, max_carry_fraction=0.5):
         self._total_gaps = total_gaps
         self._debug = debug
         self._carry_forward = carry_forward
         self._max_delay_margin = max_delay_margin
+        self._max_carry_fraction = max_carry_fraction
         self._bootstrap_delays = []
         self._delegate = None
         self._mode = None
@@ -560,13 +670,15 @@ class AutoDecoder:
             self._delegate = DistributedDecoder(
                 self._total_gaps, debug=self._debug,
                 carry_forward=self._carry_forward,
-                max_delay_margin=self._max_delay_margin)
+                max_delay_margin=self._max_delay_margin,
+                max_carry_fraction=self._max_carry_fraction)
         else:
             self._mode = "frontloaded"
             self._delegate = FrontloadedDecoder(
                 debug=self._debug,
                 carry_forward=self._carry_forward,
-                max_delay_margin=self._max_delay_margin)
+                max_delay_margin=self._max_delay_margin,
+                max_carry_fraction=self._max_carry_fraction)
 
         # Replay collected delays into the delegate directly via add_bit_by_delay.
         # This avoids timing issues since mark_time() uses time.monotonic().
@@ -591,6 +703,14 @@ class AutoDecoder:
         if new_len > self._prev_bits_len:
             self._prev_bits_len = new_len
             self._bit_count += 1
+
+    def try_correction(self, max_flips=8):
+        """Attempt low-confidence bit correction on the delegate decoder."""
+        if not self._delegate:
+            return None, []
+        return self._delegate.try_correct_low_confidence_bits(
+            max_flips=max_flips,
+        )
 
     def __repr__(self):
         return (f"AutoDecoder(mode={self._mode!r}, "

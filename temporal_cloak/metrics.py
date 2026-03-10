@@ -24,8 +24,8 @@ def compute_char_bit_errors(decoded_msg: str, original_msg: str) -> dict:
             # Missing character = 8 bit errors
             bit_errors = 8
         else:
-            orig_bits = format(ord(orig_c), "08b")
-            dec_bits = format(ord(dec_c), "08b")
+            orig_bits = format(ord(orig_c) & 0xFF, "08b")
+            dec_bits = format(ord(dec_c) & 0xFF, "08b")
             bit_errors = sum(1 for a, b in zip(orig_bits, dec_bits) if a != b)
 
         buckets[bit_errors] = buckets.get(bit_errors, 0) + 1

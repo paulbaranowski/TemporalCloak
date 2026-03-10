@@ -114,6 +114,12 @@ def decode_link(session: requests.Session, base_url: str, link_id: str,
 
     elapsed = time.monotonic() - start_time if start_time else 0.0
 
+    # Attempt low-confidence bit correction if checksum failed
+    corrected_message = None
+    flipped_indices = []
+    if decoder.message_complete and not decoder.checksum_valid:
+        corrected_message, flipped_indices = decoder.try_correction()
+
     return {
         "message": decoder.message if decoder.message_complete else decoder.partial_message,
         "message_complete": decoder.message_complete,
@@ -126,6 +132,8 @@ def decode_link(session: requests.Session, base_url: str, link_id: str,
         "time_delays": list(decoder.time_delays),
         "elapsed_seconds": round(elapsed, 3),
         "gap_count": gap_count,
+        "corrected_message": corrected_message,
+        "flipped_indices": flipped_indices,
     }
 
 
@@ -219,6 +227,8 @@ def build_run_data(result: dict, debug: dict, mode: str) -> dict:
         "gap_count": result["gap_count"],
         "time_delays": result["time_delays"],
         "confidence_scores": scores,
+        "corrected_message": result.get("corrected_message"),
+        "flipped_indices": result.get("flipped_indices", []),
     }
 
 
@@ -292,6 +302,7 @@ def aggregate_runs(runs: list[dict], label: str) -> dict:
     successes = sum(1 for r in runs if r["decode_success"])
     checksum_passes = sum(1 for r in runs if r["checksum_valid"])
     exact_matches = sum(1 for r in runs if r["exact_match"])
+    corrections = sum(1 for r in runs if r.get("corrected_message"))
     n = len(runs)
 
     bers = [r["bit_error_rate"] for r in runs if r["bit_error_rate"] is not None]
@@ -351,6 +362,7 @@ def aggregate_runs(runs: list[dict], label: str) -> dict:
         },
         "mode_detection_accuracy": mode_correct / n,
         "char_bit_error_buckets": agg_char_buckets,
+        "corrections": corrections,
     }
 
 
@@ -361,6 +373,7 @@ def print_summary(aggregates: list[dict]) -> None:
     table.add_column("Runs", justify="right")
     table.add_column("Success", justify="right")
     table.add_column("Exact Match", justify="right")
+    table.add_column("Corrected", justify="right")
     table.add_column("BER", justify="right")
     table.add_column("Avg bit/s", justify="right")
     table.add_column("Avg Time", justify="right")
@@ -375,12 +388,14 @@ def print_summary(aggregates: list[dict]) -> None:
         bps_str = f"{agg['bits_per_sec']['mean']:.1f}" if agg.get("bits_per_sec", {}).get("mean") is not None else "n/a"
         elapsed_str = f"{elapsed['mean']:.1f}s" if elapsed["mean"] is not None else "n/a"
         mode_label = agg["label"].replace("distributed", "distr").replace("frontloaded", "frnt")
+        corrections = agg.get("corrections", 0)
 
         table.add_row(
             mode_label,
             str(agg["count"]),
             f"{agg['success_rate']:.0%}",
             f"{agg['exact_match_rate']:.0%}",
+            str(corrections),
             ber_str,
             bps_str,
             elapsed_str,
