@@ -81,12 +81,22 @@ def _normalize_url(url):
     return url
 
 
+def _char_label(c: str) -> str:
+    """Format a character for display in tables, showing '�' for non-ASCII."""
+    if c == "?":
+        return "?"
+    return repr(c) if ord(c) <= 127 else "'\\ufffd'"
+
+
 def _styled_message(msg: str) -> Text:
     """Render a decoded message with visible space indicators (·)."""
     text = Text()
     for ch in msg:
         if ch == " ":
             text.append("·", style="dim")
+        elif ord(ch) > 127:
+            # Surrogate-escaped or non-ASCII byte — show replacement char
+            text.append("\ufffd", style="bold red")
         else:
             text.append(ch, style="bold white")
     return text
@@ -104,6 +114,9 @@ class DecodeSession:
         self._total_bytes = 0
         self._gap_count = 0
         self._start_time = None
+        self._raw_message = ""
+        self._corrected_message = None
+        self._flipped_indices = []
 
     def __repr__(self):
         return f"DecodeSession(url={self._url!r}, debug={self._debug})"
@@ -145,8 +158,33 @@ class DecodeSession:
                     progress.update(task, advance=1)
                     live.update(self._build_display(progress))
 
+        # Snapshot the raw decoded message before correction mutates _last_message
+        self._raw_message = self._cloak.message if self._cloak else ""
+
+        # Attempt low-confidence bit correction if checksum failed
+        self._corrected_message = None
+        self._flipped_indices = []
+        if self._cloak.message_complete and self._cloak.checksum_valid is False:
+            self._corrected_message, self._flipped_indices = self._cloak.try_correction()
+
         self._console.print()
-        if self._cloak.message_complete and self._cloak.message:
+        if self._corrected_message:
+            # Count actual character-level bit differences corrected
+            char_diffs = compute_char_bit_errors(self._raw_message, self._corrected_message)
+            bits_corrected = sum(char_diffs["per_char"])
+            self._console.print(
+                Panel(
+                    _styled_message(self._corrected_message),
+                    title="Corrected Message",
+                    subtitle=Text(
+                        f" corrected {bits_corrected} bit(s) ",
+                        style="bold yellow",
+                    ),
+                    border_style="yellow",
+                    padding=(1, 2),
+                )
+            )
+        elif self._cloak.message_complete and self._cloak.message:
             pass  # Already displayed in the live panel above
         else:
             self._display_diagnostics()
@@ -168,13 +206,16 @@ class DecodeSession:
             "url": self._url,
             "link_id": link_id,
             "result": {
-                "message": self._cloak.message if self._cloak else "",
+                "message": self._corrected_message or self._raw_message,
+                "raw_message": self._raw_message,
                 "message_complete": self._cloak.message_complete if self._cloak else False,
                 "checksum_valid": self._cloak.checksum_valid if self._cloak else None,
                 "mode": self._cloak.mode if self._cloak else None,
                 "bit_count": self._cloak.bit_count if self._cloak else 0,
                 "bits_hex": self._cloak.bits.hex if self._cloak else "",
                 "threshold": self._cloak.threshold if self._cloak else 0.0,
+                "corrected": self._corrected_message is not None,
+                "flipped_indices": self._flipped_indices,
             },
             "timing": {
                 "delays": self._cloak.time_delays if self._cloak else [],
@@ -416,7 +457,8 @@ class DecodeSession:
             return
 
         server_message = server_debug.get("message", "")
-        decoded_message = self._cloak.message if self._cloak else ""
+        raw_decoded = self._raw_message
+        final_message = self._corrected_message or raw_decoded
 
         if not server_message:
             return
@@ -427,14 +469,16 @@ class DecodeSession:
         cmp_table.add_column("", style="dim", min_width=12)
         cmp_table.add_column("")
         cmp_table.add_row("Original", _styled_message(server_message))
-        cmp_table.add_row("Decoded", _styled_message(decoded_message))
-        match = server_message == decoded_message
+        cmp_table.add_row("Decoded", _styled_message(raw_decoded))
+        if self._corrected_message:
+            cmp_table.add_row("Corrected", _styled_message(self._corrected_message))
+        match = server_message == final_message
         cmp_table.add_row("Match", Text("exact match", style="bold green") if match
                           else Text("MISMATCH", style="bold red"))
         self._console.print(cmp_table)
 
-        # Show char bit error histogram
-        char_errors = compute_char_bit_errors(decoded_message, server_message)
+        # Show char bit error histogram (against raw decode, before correction)
+        char_errors = compute_char_bit_errors(raw_decoded, server_message)
         buckets = char_errors["buckets"]
         if not buckets:
             return
@@ -470,8 +514,8 @@ class DecodeSession:
             detail.add_column("Expected Bits", style="dim")
             detail.add_column("Got Bits", style="dim")
             for pos, orig, dec, errs in mismatched:
-                orig_bits = format(ord(orig), "08b") if orig != "?" else "????????"
-                dec_bits = format(ord(dec), "08b") if dec != "?" else "????????"
+                orig_bits = format(ord(orig) & 0xFF, "08b") if orig != "?" else "????????"
+                dec_bits = format(ord(dec) & 0xFF, "08b") if dec != "?" else "????????"
                 # Highlight differing bits
                 orig_styled = Text()
                 dec_styled = Text()
@@ -484,8 +528,8 @@ class DecodeSession:
                         dec_styled.append(db, style="dim")
                 detail.add_row(
                     str(pos),
-                    repr(orig) if orig != "?" else "?",
-                    repr(dec) if dec != "?" else "?",
+                    _char_label(orig),
+                    _char_label(dec),
                     str(errs),
                     orig_styled,
                     dec_styled,
@@ -661,6 +705,91 @@ def config(server, bit_1_delay, bit_0_delay, midpoint):
 
 
 @cli.command()
+@click.argument("message")
+@click.option("--mode", type=click.Choice(["frontloaded", "distributed"]), default="distributed",
+              help="Encoding mode (default: distributed).")
+@click.option("--image", "image_mode", type=click.Choice(["smallest", "random"]), default="smallest",
+              help="Image selection strategy (default: smallest).")
+@click.option("--server", default=DEFAULT_URL.rsplit("/api", 1)[0], help="Server base URL.")
+def create(message, mode, image_mode, server):
+    """Create a shareable link with a hidden message.
+
+    The message is encoded into an image's chunk timing on the server.
+    By default, picks the smallest image that can carry the message.
+    """
+    console = Console()
+    server = server.rstrip("/")
+
+    # Fetch available images
+    try:
+        resp = requests.get(f"{server}/api/images", timeout=10)
+        resp.raise_for_status()
+        images = resp.json()
+    except requests.RequestException as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        sys.exit(1)
+
+    if not images:
+        console.print("[bold red]Error:[/bold red] No images available on the server.")
+        sys.exit(1)
+
+    # Pick an image
+    max_len_key = f"max_message_len_{mode}"
+    if image_mode == "random":
+        import random
+        eligible = [img for img in images if img.get(max_len_key, 0) >= len(message)]
+        if not eligible:
+            console.print(f"[bold red]Error:[/bold red] No image is large enough for this "
+                          f"{len(message)}-char message in {mode} mode.")
+            sys.exit(1)
+        chosen = random.choice(eligible)
+    else:
+        # smallest: sort by size ascending, pick first that fits
+        sorted_images = sorted(images, key=lambda img: img["size"])
+        chosen = None
+        for img in sorted_images:
+            if img.get(max_len_key, 0) >= len(message):
+                chosen = img
+                break
+        if chosen is None:
+            largest = sorted_images[-1]
+            console.print(f"[bold red]Error:[/bold red] Message is {len(message)} chars but the largest "
+                          f"image only supports {largest.get(max_len_key, 0)} chars in {mode} mode.")
+            sys.exit(1)
+
+    # Create the link
+    payload = {"message": message, "image": chosen["filename"], "mode": mode}
+    try:
+        resp = requests.post(f"{server}/api/create", json=payload, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        sys.exit(1)
+
+    if "error" in data:
+        console.print(f"[bold red]Error:[/bold red] {data['error']}")
+        sys.exit(1)
+
+    link_id = data["id"]
+    view_url = f"{server}/view.html?id={link_id}"
+    decode_url = f"{server}/api/image/{link_id}"
+
+    table = Table(show_header=False, border_style="green", padding=(0, 1))
+    table.add_column("Key", style="dim", min_width=12)
+    table.add_column("Value")
+    table.add_row("Link ID", link_id)
+    table.add_row("Mode", mode)
+    table.add_row("Image", chosen["filename"])
+    table.add_row("Message", message)
+    table.add_row("View URL", view_url)
+    table.add_row("Decode URL", decode_url)
+
+    console.print("[bold green]Link created[/bold green]\n")
+    console.print(table)
+
+
+@cli.command()
 @click.argument("file", type=click.Path(exists=True))
 @click.option("--limit", type=int, default=0, help="Max rows in per-bit table (0 = all).")
 def timing(file, limit):
@@ -681,6 +810,8 @@ def timing(file, limit):
 
     if data.get("server_debug"):
         console.print()
+        _timing_message_comparison(console, data)
+        console.print()
         _timing_server_comparison(console, data)
 
 
@@ -695,7 +826,11 @@ def _timing_summary(console, data):
     table.add_column("Value")
 
     table.add_row("Mode", result.get("mode") or "unknown")
-    table.add_row("Message", result.get("message") or "(none)")
+    if result.get("corrected") and result.get("raw_message"):
+        table.add_row("Decoded", result.get("raw_message"))
+        table.add_row("Corrected", result.get("message") or "(none)")
+    else:
+        table.add_row("Message", result.get("message") or "(none)")
 
     checksum = result.get("checksum_valid")
     if checksum is True:
@@ -856,6 +991,78 @@ def _timing_histogram(console, data):
 
         label = f"  {lo:7.4f}s "
         console.print(Text(f"{label}{bar} {count}{marker}"))
+
+
+def _timing_message_comparison(console, data):
+    """Display message comparison and char bit error histogram from saved data."""
+    server_debug = data.get("server_debug", {})
+    result = data.get("result", {})
+
+    server_message = server_debug.get("message", "")
+    raw_decoded = result.get("raw_message") or result.get("message", "")
+    corrected = result.get("message", "") if result.get("corrected") else None
+    final_message = corrected or raw_decoded
+
+    if not server_message:
+        return
+
+    cmp_table = Table(title="Message Comparison", show_header=False, border_style="dim")
+    cmp_table.add_column("", style="dim", min_width=12)
+    cmp_table.add_column("")
+    cmp_table.add_row("Original", _styled_message(server_message))
+    cmp_table.add_row("Decoded", _styled_message(raw_decoded))
+    if corrected:
+        cmp_table.add_row("Corrected", _styled_message(corrected))
+    match = server_message == final_message
+    cmp_table.add_row("Match", Text("exact match", style="bold green") if match
+                      else Text("MISMATCH", style="bold red"))
+    console.print(cmp_table)
+
+    # Char bit error histogram (against raw decode, before correction)
+    char_errors = compute_char_bit_errors(raw_decoded, server_message)
+    buckets = char_errors["buckets"]
+    if not buckets:
+        return
+
+    total_chars = char_errors["total_chars"]
+    console.print()
+    err_table = Table(title="Bit Errors Per Character", border_style="dim")
+    err_table.add_column("Bit Errors", justify="right", style="bold")
+    err_table.add_column("Chars", justify="right")
+    err_table.add_column("Pct", justify="right")
+    err_table.add_column("", width=30)
+
+    for errors in sorted(buckets.keys()):
+        count = buckets[errors]
+        pct = count / total_chars if total_chars else 0
+        bar = "#" * int(pct * 30)
+        style = "green" if errors == 0 else "yellow" if errors <= 2 else "red"
+        err_table.add_row(
+            str(errors), str(count), f"{pct:.1%}", Text(bar, style=style))
+    console.print(err_table)
+
+    # Show mismatched characters detail
+    mismatched = [(i, orig, dec, errs) for i, (orig, dec, errs)
+                  in enumerate(char_errors["per_char"]) if errs > 0]
+    if mismatched:
+        console.print()
+        detail = Table(title="Mismatched Characters", border_style="dim")
+        detail.add_column("Pos", justify="right", style="dim")
+        detail.add_column("Expected", justify="center")
+        detail.add_column("Got", justify="center")
+        detail.add_column("Bit Errors", justify="right")
+        detail.add_column("Expected Bits", justify="center")
+        detail.add_column("Got Bits", justify="center")
+        for pos, orig, dec, errs in mismatched:
+            detail.add_row(
+                str(pos),
+                _char_label(orig),
+                Text(_char_label(dec), style="bold red"),
+                str(errs),
+                format(ord(orig) & 0xFF, "08b") if orig != "?" else "????????",
+                format(ord(dec) & 0xFF, "08b") if dec != "?" else "????????",
+            )
+        console.print(detail)
 
 
 def _timing_server_comparison(console, data):

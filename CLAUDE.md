@@ -12,14 +12,14 @@ TemporalCloak is a time-based steganography tool. It hides secret messages in th
 # Setup (uses uv, not pip)
 uv sync
 
-# Run all tests (unittest, no pytest)
-uv run python -m unittest discover -s tests -v
+# Run all tests
+uv run pytest tests/ -v
 
 # Run a single test file
-uv run python -m unittest tests.test_encoding -v
+uv run pytest tests/test_encoding.py -v
 
 # Run a single test method
-uv run python -m unittest tests.test_encoding.TestEncoding.test_encode_message -v
+uv run pytest tests/test_encoding.py::TestEncoding::test_encode_message -v
 
 # CLI tool (installed via pyproject.toml entry point)
 uv run temporal-cloak decode <URL>         # stream-decode a link's hidden message

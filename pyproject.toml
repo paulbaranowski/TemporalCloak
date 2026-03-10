@@ -19,3 +19,8 @@ dependencies = [
 
 [project.scripts]
 temporal-cloak = "temporal_cloak.cli:cli"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]

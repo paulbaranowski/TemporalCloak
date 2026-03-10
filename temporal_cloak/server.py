@@ -1,5 +1,5 @@
 import socket
-from temporal_cloak.decoding import FrontloadedDecoder
+from temporal_cloak.decoding import StreamingFrontloadedDecoder
 
 
 class TemporalCloakServer:
@@ -10,7 +10,7 @@ class TemporalCloakServer:
         self._listen_sock = None
         self._client_sock = None
         self._client_addr = None
-        self._cloak = FrontloadedDecoder(debug=debug)
+        self._cloak = StreamingFrontloadedDecoder(debug=debug)
 
     @property
     def host(self) -> str:

@@ -3,7 +3,8 @@ import warnings
 from bitstring import Bits, BitArray, BitStream
 from temporal_cloak.const import TemporalCloakConst
 from temporal_cloak.decoding import (
-    TemporalCloakDecoding, FrontloadedDecoder, DistributedDecoder
+    TemporalCloakDecoding, FrontloadedDecoder, DistributedDecoder,
+    StreamingFrontloadedDecoder
 )
 from temporal_cloak.encoding import FrontloadedEncoder, DistributedEncoder
 
@@ -71,6 +72,65 @@ class TestFindBoundary(unittest.TestCase):
         second = TemporalCloakDecoding.find_boundary(self.bits_with_two_boundaries, first)
         # 10 + 16 + 10 + 16 = 52
         self.assertEqual(second, 36)
+
+    def test_fuzzy_finds_corrupted_boundary(self):
+        """Fuzzy search finds a boundary with 1-2 bit errors."""
+        boundary = BitArray(TemporalCloakConst.BOUNDARY_BITS)  # 0xFF00
+        corrupted = BitArray(boundary)
+        corrupted.invert(12)  # flip one bit
+        # Use all-zero padding (far from 0xFF00) to avoid false fuzzy matches
+        padding = BitArray(16)
+        bits = BitStream(padding + corrupted + padding)
+        # Exact search should miss it
+        self.assertIsNone(TemporalCloakDecoding.find_boundary(bits))
+        # Fuzzy search should find it at position 16
+        result = TemporalCloakDecoding.find_boundary_fuzzy(bits, max_errors=2)
+        self.assertEqual(result, 16)
+
+    def test_fuzzy_rejects_too_many_errors(self):
+        """Fuzzy search rejects a boundary with more errors than max_errors."""
+        boundary = BitArray(TemporalCloakConst.BOUNDARY_BITS)
+        corrupted = BitArray(boundary)
+        corrupted.invert(0)
+        corrupted.invert(5)
+        corrupted.invert(12)  # 3 bit errors
+        bits = BitStream(BitArray('0b0101010101') + corrupted + BitArray('0b0101010101'))
+        result = TemporalCloakDecoding.find_boundary_fuzzy(bits, max_errors=2)
+        self.assertIsNone(result)
+
+    def test_corrupted_end_boundary_still_completes(self):
+        """Message with a corrupted end boundary should still complete via fuzzy match."""
+        enc = FrontloadedEncoder()
+        enc.message = "ok"
+        bits = BitArray(enc._message_bits_padded)
+        # Corrupt 1 bit in the end boundary (last 16 bits)
+        bits.invert(len(bits) - 5)
+
+        decoder = FrontloadedDecoder()
+        for bit in bits:
+            decoder.add_bit(int(bit))
+
+        result, completed, _ = decoder.bits_to_message()
+        self.assertTrue(completed)
+        self.assertEqual(result, "ok")
+        self.assertTrue(decoder.checksum_valid)
+
+    def test_corrupted_start_boundary_still_completes(self):
+        """Message with a corrupted start boundary should still complete via fuzzy match."""
+        enc = FrontloadedEncoder()
+        enc.message = "ok"
+        bits = BitArray(enc._message_bits_padded)
+        # Corrupt 1 bit in the start boundary (first 16 bits)
+        bits.invert(3)
+
+        decoder = FrontloadedDecoder()
+        for bit in bits:
+            decoder.add_bit(int(bit))
+
+        result, completed, _ = decoder.bits_to_message()
+        self.assertTrue(completed)
+        self.assertEqual(result, "ok")
+        self.assertTrue(decoder.checksum_valid)
 
 
 class TestEndBoundary(unittest.TestCase):
@@ -169,6 +229,26 @@ class TestXORChecksum(unittest.TestCase):
             checksum_warns = [x for x in w if "Checksum mismatch" in str(x.message)]
             self.assertTrue(len(checksum_warns) > 0, "Expected checksum mismatch warning")
         self.assertFalse(decoder.checksum_valid)
+
+    def test_checksum_valid_survives_post_completion_calls(self):
+        """After message completes, subsequent bits_to_message() calls must not
+        reset checksum_valid back to None."""
+        enc = FrontloadedEncoder()
+        enc.message = "hello"
+        decoder = FrontloadedDecoder()
+        for bit in enc._message_bits_padded:
+            decoder.add_bit(int(bit))
+        result, completed, _ = decoder.bits_to_message()
+        self.assertTrue(completed)
+        self.assertTrue(decoder.checksum_valid)
+
+        # Simulate post-completion chunks arriving (adds bits, re-calls decode)
+        for _ in range(16):
+            decoder.add_bit(0)
+        result2, completed2, _ = decoder.bits_to_message()
+
+        # checksum_valid must still be True, not reset to None
+        self.assertTrue(decoder.checksum_valid)
 
 
 class TestAdaptiveThreshold(unittest.TestCase):
@@ -324,16 +404,12 @@ class TestCarryForwardCompensation(unittest.TestCase):
         Carry-forward should cap gap 2 and add excess to gap 3, classifying
         gap 3 correctly as 0."""
         decoder = FrontloadedDecoder(carry_forward=True)
-        # Expected bits: 1, 0, 1 (delays: 0.0, 0.3, 0.0)
-        # Simulated shift: gap 2 gets extra 0.168s, gap 3 shrinks by same
-        # Result without carry: [0.001 → 1, 0.466 → 0, 0.001 → 1] (gap 3 wrong if it was meant to be 0)
-        # But let's test a case where shift actually flips a bit:
         # Expected: 1, 0, 0 (delays: 0.0, 0.3, 0.3)
-        # Shifted:  0.001, 0.55, 0.05
-        # Without carry: 0.55 > 0.15 → 0 (ok), 0.05 < 0.15 → 1 (WRONG, should be 0)
-        # With carry: 0.55 capped at 0.33 (max_expected), carry=0.22
-        #             0.05 + 0.22 = 0.27 > 0.15 → 0 (CORRECT)
-        delays = [0.001, 0.55, 0.05]
+        # Shifted:  0.001, 0.40, 0.10
+        # Without carry: 0.40 > 0.15 → 0 (ok), 0.10 < 0.15 → 1 (WRONG, should be 0)
+        # With carry: 0.40 capped at 0.33, carry=0.07 (under cap of ~0.078)
+        #             0.10 + 0.07 = 0.17 > 0.15 → 0 (CORRECT)
+        delays = [0.001, 0.40, 0.10]
         for d in delays:
             decoder.add_bit_by_delay(d)
         # Bits should be: 1, 0, 0
@@ -377,6 +453,141 @@ class TestCarryForwardCompensation(unittest.TestCase):
             decoder.on_completed(result)
         self.assertAlmostEqual(decoder._carry, 0.0)
 
+    def test_carry_cap_prevents_flip(self):
+        """An oversized 0-bit delay should not flip the next clean 1-bit.
+
+        Delay sequence: [0.001 (1-bit), 0.50 (huge 0-bit), 0.001 (clean 1-bit)]
+        Without cap: carry=0.50-0.33=0.17 → 0.001+0.17=0.171 > threshold → wrong 0
+        With cap (0.5): carry capped at ~0.078 → 0.001+0.078=0.079 < threshold → correct 1
+        """
+        decoder = FrontloadedDecoder(carry_forward=True)
+        delays = [0.001, 0.50, 0.001]
+        for d in delays:
+            decoder.add_bit_by_delay(d)
+        self.assertEqual(decoder.bits, BitStream('0b101'))
+        # After all three delays, carry should have been consumed (added to third delay)
+        self.assertAlmostEqual(decoder._carry, 0.0)
+
+    def test_carry_cap_prevents_flip_without_cap(self):
+        """Verify the uncapped behavior would have produced the wrong result."""
+        decoder = FrontloadedDecoder(carry_forward=True, max_carry_fraction=100.0)
+        delays = [0.001, 0.50, 0.001]
+        for d in delays:
+            decoder.add_bit_by_delay(d)
+        # With effectively no cap, carry=0.17 flips the third bit to 0
+        self.assertEqual(decoder.bits, BitStream('0b100'))
+
+    def test_carry_cap_consecutive_oversized_delays(self):
+        """Multiple consecutive oversized 0-bit delays should not accumulate
+        carry beyond the cap, even when each one individually overflows."""
+        decoder = FrontloadedDecoder(carry_forward=True)
+        # Three oversized 0-bits in a row, then a clean 1-bit
+        delays = [0.50, 0.50, 0.50, 0.001]
+        for d in delays:
+            decoder.add_bit_by_delay(d)
+        # All oversized delays classified as 0, the clean 1-bit stays 1
+        self.assertEqual(decoder.bits, BitStream('0b0001'))
+
+    def test_carry_cap_massive_overflow(self):
+        """An extremely large delay (e.g. 2.0s) should still cap carry safely."""
+        decoder = FrontloadedDecoder(carry_forward=True)
+        delays = [2.0, 0.001]
+        for d in delays:
+            decoder.add_bit_by_delay(d)
+        # 2.0 → 0 (capped at 0.33, carry capped at threshold*0.5 ≈ 0.078)
+        # 0.001 + 0.078 = 0.079 < threshold → 1
+        self.assertEqual(decoder.bits, BitStream('0b01'))
+        max_carry = decoder.threshold * decoder._max_carry_fraction
+        # Carry after second delay was consumed, but verify it was clamped after first
+        self.assertAlmostEqual(decoder._carry, 0.0)
+
+    def test_carry_cap_alternating_oversized_and_clean(self):
+        """Alternating oversized 0-bits and clean 1-bits — carry cap should
+        protect every clean 1-bit from being flipped."""
+        decoder = FrontloadedDecoder(carry_forward=True)
+        # Pattern: oversized-0, clean-1, oversized-0, clean-1, oversized-0, clean-1
+        delays = [0.50, 0.001, 0.50, 0.001, 0.50, 0.001]
+        for d in delays:
+            decoder.add_bit_by_delay(d)
+        self.assertEqual(decoder.bits, BitStream('0b010101'))
+
+    def test_carry_cap_just_below_cap_threshold(self):
+        """Carry just below the cap should pass through without clamping."""
+        decoder = FrontloadedDecoder(carry_forward=True)
+        max_carry = decoder.threshold * decoder._max_carry_fraction
+        # Construct a delay that produces carry just under the cap
+        # max_expected = 0.33, so delay = 0.33 + (max_carry - 0.001) ≈ 0.407
+        delay_just_under = decoder._max_expected_delay + max_carry - 0.001
+        decoder.add_bit_by_delay(delay_just_under)
+        # Carry should be just under the cap (not clamped)
+        expected_carry = delay_just_under - decoder._max_expected_delay
+        self.assertAlmostEqual(decoder._carry, expected_carry, places=5)
+        self.assertLess(decoder._carry, max_carry)
+
+    def test_carry_cap_just_above_cap_threshold(self):
+        """Carry just above the cap should be clamped to exactly the cap."""
+        decoder = FrontloadedDecoder(carry_forward=True)
+        max_carry = decoder.threshold * decoder._max_carry_fraction
+        # Delay that produces carry just over the cap
+        delay_just_over = decoder._max_expected_delay + max_carry + 0.01
+        decoder.add_bit_by_delay(delay_just_over)
+        self.assertAlmostEqual(decoder._carry, max_carry, places=5)
+
+    def test_carry_cap_custom_fraction(self):
+        """Custom max_carry_fraction should change the cap proportionally."""
+        # Very tight cap (10% of threshold)
+        decoder = FrontloadedDecoder(carry_forward=True, max_carry_fraction=0.1)
+        decoder.add_bit_by_delay(0.50)  # big overflow
+        max_carry = decoder.threshold * 0.1
+        self.assertAlmostEqual(decoder._carry, max_carry, places=5)
+
+        # Very loose cap (90% of threshold)
+        decoder2 = FrontloadedDecoder(carry_forward=True, max_carry_fraction=0.9)
+        decoder2.add_bit_by_delay(0.50)  # same overflow
+        max_carry2 = decoder2.threshold * 0.9
+        self.assertAlmostEqual(decoder2._carry, max_carry2, places=5)
+
+    def test_carry_cap_end_to_end_with_jitter(self):
+        """Full encode/decode with simulated carry-overflow jitter pattern.
+        Inject the exact error pattern from the benchmark: a 0-bit delay
+        bloats to ~0.50s, stealing time from the next 1-bit gap."""
+        enc = FrontloadedEncoder()
+        enc.message = "OK"
+        delays = list(enc.delays)
+
+        # Find a 0-bit followed by a 1-bit and inject carry-overflow jitter
+        for i in range(len(delays) - 1):
+            if delays[i] > 0.1 and delays[i + 1] < 0.1:
+                # Bloat the 0-bit to 0.50s (simulating TCP buffering)
+                delays[i] = 0.50
+                delays[i + 1] = max(0.0, delays[i + 1])
+                break
+
+        decoder = FrontloadedDecoder(carry_forward=True)
+        for d in delays:
+            decoder.add_bit_by_delay(d)
+        result, completed, _ = decoder.bits_to_message()
+        self.assertTrue(completed)
+        self.assertEqual(result, "OK")
+
+    def test_carry_cap_preserves_small_carry(self):
+        """Modest overruns should carry through without being capped."""
+        decoder = FrontloadedDecoder(carry_forward=True)
+        # 0.35s is slightly above max_expected (0.33s), carry = 0.02
+        # 0.02 < threshold*0.5 (~0.078), so carry should pass through uncapped
+        delays = [0.001, 0.35, 0.13]
+        for d in delays:
+            decoder.add_bit_by_delay(d)
+        # 0.001 → 1, 0.35 capped at 0.33 → 0 (carry=0.02), 0.13+0.02=0.15 ≤ threshold → 1
+        self.assertEqual(decoder.bits, BitStream('0b101'))
+        # Carry should now be 0 (it was consumed)
+        self.assertAlmostEqual(decoder._carry, 0.0)
+
+    def test_carry_cap_default_value(self):
+        """Default max_carry_fraction should be 0.5."""
+        decoder = FrontloadedDecoder()
+        self.assertEqual(decoder._max_carry_fraction, 0.5)
+
     def test_end_to_end(self):
         """Encode a message, simulate jitter by shifting delay between
         adjacent gaps, decode with carry-forward, verify correct message."""
@@ -400,6 +611,227 @@ class TestCarryForwardCompensation(unittest.TestCase):
         result, completed, _ = decoder.bits_to_message()
         self.assertTrue(completed)
         self.assertEqual(result, "Hi")
+
+
+class TestLowConfidenceBitCorrection(unittest.TestCase):
+    """Verify low-confidence bit correction (Option 2 from error-correction-plan)."""
+
+    def _encode_and_corrupt(self, message, flip_positions):
+        """Encode a message, flip specific bits in the payload, return the corrupted BitArray."""
+        enc = FrontloadedEncoder()
+        enc.message = message
+        corrupted = BitArray(enc._message_bits_padded)
+        boundary_len = len(BitArray(TemporalCloakConst.BOUNDARY_BITS))
+        for pos in flip_positions:
+            corrupted.invert(boundary_len + pos)
+        return corrupted
+
+    def _build_decoder_with_low_confidence(self, corrupted_bits, low_confidence_indices):
+        """Build a FrontloadedDecoder with bits injected and specific
+        confidence scores set artificially low."""
+        decoder = FrontloadedDecoder()
+        for bit in corrupted_bits:
+            decoder.add_bit(int(bit))
+        # add_bit doesn't populate confidence scores, so fill them manually
+        boundary_len = len(BitArray(TemporalCloakConst.BOUNDARY_BITS))
+        decoder._confidence_scores = [0.9] * len(corrupted_bits)
+        for idx in low_confidence_indices:
+            decoder._confidence_scores[boundary_len + idx] = 0.05
+        return decoder
+
+    def test_single_flip_correction(self):
+        """One corrupted bit with low confidence should be corrected."""
+        corrupted = self._encode_and_corrupt("hi", [3])
+        decoder = self._build_decoder_with_low_confidence(corrupted, [3])
+
+        # Verify checksum fails before correction
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            _, completed, _ = decoder.bits_to_message()
+        self.assertTrue(completed)
+        self.assertFalse(decoder.checksum_valid)
+
+        corrected, flipped = decoder.try_correct_low_confidence_bits()
+        self.assertIsNotNone(corrected)
+        self.assertEqual(corrected, "hi")
+        self.assertEqual(len(flipped), 1)
+
+    def test_double_flip_correction(self):
+        """Two corrupted bits with low confidence should be corrected via pair-flip."""
+        corrupted = self._encode_and_corrupt("hi", [2, 5])
+        decoder = self._build_decoder_with_low_confidence(corrupted, [2, 5])
+
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            _, completed, _ = decoder.bits_to_message()
+        self.assertTrue(completed)
+        self.assertFalse(decoder.checksum_valid)
+
+        corrected, flipped = decoder.try_correct_low_confidence_bits()
+        self.assertIsNotNone(corrected)
+        self.assertEqual(corrected, "hi")
+        self.assertEqual(len(flipped), 2)
+
+    def test_triple_flip_correction(self):
+        """Three corrupted bits should be corrected via triple-flip."""
+        corrupted = self._encode_and_corrupt("hi", [1, 5, 10])
+        decoder = self._build_decoder_with_low_confidence(corrupted, [1, 5, 10])
+
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            _, completed, _ = decoder.bits_to_message()
+        self.assertTrue(completed)
+        self.assertFalse(decoder.checksum_valid)
+
+        corrected, flipped = decoder.try_correct_low_confidence_bits()
+        self.assertIsNotNone(corrected)
+        self.assertEqual(corrected, "hi")
+        self.assertEqual(len(flipped), 3)
+
+    def test_non_ascii_bit_error_still_completes(self):
+        """A bit flip producing a non-ASCII byte should not prevent completion."""
+        enc = FrontloadedEncoder()
+        enc.message = "hi"
+        corrupted = BitArray(enc._message_bits_padded)
+        boundary_len = len(BitArray(TemporalCloakConst.BOUNDARY_BITS))
+        # Flip bit 7 (MSB) of first message byte: 'h' (0x68) -> 0xe8 (non-ASCII)
+        corrupted.invert(boundary_len + 0)
+
+        decoder = FrontloadedDecoder()
+        for bit in corrupted:
+            decoder.add_bit(int(bit))
+
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            result, completed, _ = decoder.bits_to_message()
+        # Message should still be "completed" (both boundaries found)
+        self.assertTrue(completed)
+        # The non-ASCII byte should appear as a surrogate-escaped char
+        self.assertTrue(any(ord(c) > 127 for c in result))
+
+    def test_no_correction_needed(self):
+        """Valid message — flipping any low-confidence bit won't produce another valid checksum."""
+        enc = FrontloadedEncoder()
+        enc.message = "ok"
+        decoder = FrontloadedDecoder()
+        for bit in enc._message_bits_padded:
+            decoder.add_bit(int(bit))
+        decoder._confidence_scores = [0.9] * len(decoder._confidence_scores)
+
+        corrected, flipped = decoder.try_correct_low_confidence_bits()
+        self.assertIsNone(corrected)
+        self.assertEqual(flipped, [])
+
+    def test_correction_respects_max_flips(self):
+        """With max_flips=2, only 2 candidates should be tried even if more are low-confidence."""
+        corrupted = self._encode_and_corrupt("hi", [1, 3, 5])
+        decoder = self._build_decoder_with_low_confidence(corrupted, [1, 3, 5])
+
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            decoder.bits_to_message()
+
+        # With 3 flipped bits but max_flips=2, pair correction can only try
+        # 2 of the 3 candidates — it may or may not find the right pair.
+        # The important thing is it doesn't try all 3.
+        corrected, flipped = decoder.try_correct_low_confidence_bits(max_flips=2)
+        # With 3 errors and only 2 flips allowed, correction should fail
+        self.assertIsNone(corrected)
+
+    def test_correction_does_not_corrupt(self):
+        """If no correction succeeds, original bits are restored unchanged."""
+        corrupted = self._encode_and_corrupt("hi", [1, 3, 5, 7, 9, 11])
+        decoder = self._build_decoder_with_low_confidence(corrupted, [1, 3, 5, 7, 9, 11])
+
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            decoder.bits_to_message()
+
+        original_bits = BitArray(decoder._bits)
+
+        corrected, flipped = decoder.try_correct_low_confidence_bits(max_flips=3)
+        self.assertIsNone(corrected)
+        self.assertEqual(flipped, [])
+        # Bits should be restored to original
+        self.assertEqual(BitArray(decoder._bits), original_bits)
+
+    def test_auto_decoder_try_correction(self):
+        """AutoDecoder.try_correction() delegates to the underlying decoder."""
+        from temporal_cloak.decoding import AutoDecoder
+        auto = AutoDecoder(total_gaps=100)
+        # No delegate yet — should return (None, [])
+        corrected, flipped = auto.try_correction()
+        self.assertIsNone(corrected)
+        self.assertEqual(flipped, [])
+
+
+class TestStreamingVsImageDownload(unittest.TestCase):
+    """Verify that base decoders preserve bits (image-download mode) while
+    StreamingFrontloadedDecoder truncates bits (multi-message streaming)."""
+
+    def _encode_and_feed(self, decoder):
+        """Encode 'test', feed all bits into decoder, complete the message."""
+        enc = FrontloadedEncoder()
+        enc.message = "test"
+        for bit in enc._message_bits_padded:
+            decoder.add_bit(int(bit))
+        result, completed, _ = decoder.bits_to_message()
+        self.assertTrue(completed)
+        self.assertEqual(result, "test")
+        return result
+
+    def test_image_download_preserves_bits_after_completion(self):
+        """FrontloadedDecoder (image-download) should NOT truncate bits after on_completed."""
+        decoder = FrontloadedDecoder()
+        result = self._encode_and_feed(decoder)
+        bits_before = BitArray(decoder._bits)
+        decoder.on_completed(result)
+        # Bits should be preserved — not truncated
+        self.assertEqual(BitArray(decoder._bits), bits_before)
+
+    def test_streaming_truncates_bits_after_completion(self):
+        """StreamingFrontloadedDecoder should truncate bits after on_completed."""
+        decoder = StreamingFrontloadedDecoder()
+        result = self._encode_and_feed(decoder)
+        bits_len_before = len(decoder._bits)
+        decoder.on_completed(result)
+        # Bits should be truncated (shorter than before)
+        self.assertLess(len(decoder._bits), bits_len_before)
+
+    def test_correction_works_after_completion(self):
+        """FrontloadedDecoder should support error correction after on_completed
+        because bits are preserved."""
+        enc = FrontloadedEncoder()
+        enc.message = "hi"
+        corrupted = BitArray(enc._message_bits_padded)
+        boundary_len = len(BitArray(TemporalCloakConst.BOUNDARY_BITS))
+
+        # Flip one bit in the payload
+        flip_pos = boundary_len + 3
+        corrupted.invert(flip_pos)
+
+        decoder = FrontloadedDecoder()
+        for bit in corrupted:
+            decoder.add_bit(int(bit))
+
+        # Set up confidence scores: all high except the flipped bit
+        decoder._confidence_scores = [0.9] * len(corrupted)
+        decoder._confidence_scores[flip_pos] = 0.05
+
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            _, completed, _ = decoder.bits_to_message()
+        self.assertTrue(completed)
+        self.assertFalse(decoder.checksum_valid)
+
+        # Complete the message — bits should be preserved
+        decoder.on_completed("")
+
+        # Error correction should still work
+        corrected, flipped = decoder.try_correct_low_confidence_bits()
+        self.assertIsNotNone(corrected)
+        self.assertEqual(corrected, "hi")
+        self.assertTrue(decoder.checksum_valid)
 
 
 if __name__ == '__main__':

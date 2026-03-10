@@ -273,6 +273,7 @@ class TestCollectTimingData(unittest.TestCase):
         cloak.confidence_scores = [0.95, 0.87, 0.92, 0.85]
 
         session._cloak = cloak
+        session._raw_message = "hello"
         session._total_bytes = 12345
         session._gap_count = 48
         session._server_config = {"bit_1_delay": 0.0, "bit_0_delay": 0.30}
@@ -355,6 +356,7 @@ class TestSaveTimingData(unittest.TestCase):
         cloak.time_delays = [0.01, 0.30]
         cloak.confidence_scores = [0.9, 0.8]
         session._cloak = cloak
+        session._raw_message = "test"
         session._total_bytes = 5000
         session._gap_count = 16
 
