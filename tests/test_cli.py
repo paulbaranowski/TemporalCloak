@@ -6,7 +6,7 @@ from unittest.mock import patch, MagicMock
 from click.testing import CliRunner
 
 from temporal_cloak.cli import (
-    _normalize_url, _extract_link_id, _build_api_url, DecodeSession, cli
+    _normalize_url, _extract_link_id, _build_api_url, _resolve_server, DecodeSession, cli
 )
 
 
@@ -137,6 +137,26 @@ class TestExtractLinkId(unittest.TestCase):
         self.assertIsNone(
             _extract_link_id("https://temporalcloak.cloud/api/image")
         )
+
+
+class TestResolveServer(unittest.TestCase):
+    """Test _resolve_server alias resolution."""
+
+    def test_local_alias(self):
+        self.assertEqual(_resolve_server("local"), "http://localhost:8888")
+
+    def test_prod_alias(self):
+        self.assertEqual(_resolve_server("prod"), "https://temporalcloak.cloud")
+
+    def test_case_insensitive(self):
+        self.assertEqual(_resolve_server("LOCAL"), "http://localhost:8888")
+        self.assertEqual(_resolve_server("Prod"), "https://temporalcloak.cloud")
+
+    def test_full_url_passthrough(self):
+        self.assertEqual(_resolve_server("https://example.com"), "https://example.com")
+
+    def test_full_url_trailing_slash_stripped(self):
+        self.assertEqual(_resolve_server("http://localhost:9999/"), "http://localhost:9999")
 
 
 class TestBuildApiUrl(unittest.TestCase):
@@ -355,6 +375,8 @@ class TestSaveTimingData(unittest.TestCase):
         cloak.threshold = 0.15
         cloak.time_delays = [0.01, 0.30]
         cloak.confidence_scores = [0.9, 0.8]
+        cloak.hamming = False
+        cloak.hamming_corrections = 0
         session._cloak = cloak
         session._raw_message = "test"
         session._total_bytes = 5000
@@ -580,3 +602,51 @@ class TestTimingCommandWithServerComparison(unittest.TestCase):
             self.assertIn("Comparison", result.output)
             # Client has 0xff = 11111111, server expected 11110000 → 4 mismatches
             self.assertIn("4 mismatches", result.output)
+
+
+class TestCorrectionCalculation(unittest.TestCase):
+    """Test that _count_bits_corrected correctly sums bit errors.
+
+    Regression test: compute_char_bit_errors returns per_char as a list of
+    (orig_char, decoded_char, bit_errors) tuples.  A previous bug passed
+    this list directly to sum(), which crashed with TypeError because
+    sum() cannot add tuples to int(0).
+    """
+
+    def _make_session(self, raw, corrected):
+        session = DecodeSession("https://example.com/api/image")
+        session._raw_message = raw
+        session._corrected_message = corrected
+        return session
+
+    def test_single_char_difference(self):
+        # 'e' (0x65) vs 'f' (0x66) differs by 2 bits
+        session = self._make_session("Hfllo", "Hello")
+        self.assertEqual(session._count_bits_corrected(), 2)
+
+    def test_multiple_differences(self):
+        # 'A' (0x41) vs 'a' (0x61) = 1 bit, 'B' (0x42) vs 'b' (0x62) = 1 bit
+        session = self._make_session("AB", "ab")
+        self.assertEqual(session._count_bits_corrected(), 2)
+
+    def test_identical_strings(self):
+        session = self._make_session("Hello", "Hello")
+        self.assertEqual(session._count_bits_corrected(), 0)
+
+    def test_attempt_correction_sets_state(self):
+        """_attempt_correction populates raw_message and corrected_message."""
+        session = DecodeSession("https://example.com/api/image")
+
+        mock_cloak = MagicMock()
+        mock_cloak.message = "Hfllo"
+        mock_cloak.message_complete = True
+        mock_cloak.checksum_valid = False
+        mock_cloak.try_correction.return_value = ("Hello", [10])
+        session._cloak = mock_cloak
+
+        session._attempt_correction()
+
+        self.assertEqual(session._raw_message, "Hfllo")
+        self.assertEqual(session._corrected_message, "Hello")
+        self.assertEqual(session._flipped_indices, [10])
+        self.assertEqual(session._count_bits_corrected(), 2)

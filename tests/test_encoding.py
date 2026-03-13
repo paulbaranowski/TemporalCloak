@@ -385,5 +385,211 @@ class TestDistKeyProperty(unittest.TestCase):
         self.assertLessEqual(enc.dist_key, 255)
 
 
+# ── Hamming(12,8) FEC variants ───────────────────────────────────────
+
+
+class TestFrontloadedHammingBoundary(unittest.TestCase):
+    """Boundary marker changes with hamming=True."""
+
+    def test_boundary_is_ff02(self):
+        enc = FrontloadedEncoder(hamming=True)
+        self.assertEqual(enc.BOUNDARY, TemporalCloakConst.BOUNDARY_BITS_FEC)
+
+    def test_boundary_appears_in_padded_bits(self):
+        enc = FrontloadedEncoder(hamming=True)
+        enc.message = "hi"
+        boundary = BitArray(TemporalCloakConst.BOUNDARY_BITS_FEC)
+        pos = enc._message_bits_padded.find(boundary)
+        self.assertTrue(len(pos) > 0)
+
+    def test_no_ff00_boundary_in_hamming_encoder(self):
+        enc = FrontloadedEncoder(hamming=True)
+        enc.message = "hi"
+        boundary_ff00 = BitArray(TemporalCloakConst.BOUNDARY_BITS)
+        pos = enc._message_bits_padded.find(boundary_ff00)
+        self.assertEqual(len(pos), 0)
+
+
+class TestDistributedHammingBoundary(unittest.TestCase):
+    """Boundary marker changes with hamming=True in distributed mode."""
+
+    def test_boundary_is_ff03(self):
+        enc = DistributedEncoder(hamming=True)
+        self.assertEqual(enc.BOUNDARY, TemporalCloakConst.BOUNDARY_BITS_DISTRIBUTED_FEC)
+
+    def test_boundary_appears_in_padded_bits(self):
+        enc = DistributedEncoder(hamming=True)
+        enc.message = "hi"
+        boundary = BitArray(TemporalCloakConst.BOUNDARY_BITS_DISTRIBUTED_FEC)
+        pos = enc._message_bits_padded.find(boundary)
+        self.assertTrue(len(pos) > 0)
+
+
+class TestFrontloadedHammingBitsRequired(unittest.TestCase):
+    """bits_required, min_image_size, max_message_len with hamming=True."""
+
+    def test_bits_required_greater_with_hamming(self):
+        without = FrontloadedEncoder.bits_required(5)
+        with_h = FrontloadedEncoder.bits_required(5, hamming=True)
+        self.assertGreater(with_h, without)
+
+    def test_bits_required_formula(self):
+        # hamming: boundary(16)*2 + (msg_len+1)*12
+        self.assertEqual(
+            FrontloadedEncoder.bits_required(5, hamming=True),
+            32 + 6 * 12,  # 32 + 72 = 104
+        )
+
+    def test_bits_required_matches_actual_delays(self):
+        enc = FrontloadedEncoder(hamming=True)
+        enc.message = "hello"
+        self.assertEqual(
+            FrontloadedEncoder.bits_required(5, hamming=True),
+            len(enc.delays),
+        )
+
+    def test_max_message_len_less_with_hamming(self):
+        image_size = 50000
+        without = FrontloadedEncoder.max_message_len(image_size)
+        with_h = FrontloadedEncoder.max_message_len(image_size, hamming=True)
+        self.assertGreater(without, with_h)
+
+    def test_max_message_len_roundtrip(self):
+        image_size = 50000
+        max_len = FrontloadedEncoder.max_message_len(image_size, hamming=True)
+        self.assertGreater(max_len, 0)
+        self.assertTrue(FrontloadedEncoder.validate_image_size(
+            image_size, max_len, hamming=True))
+        self.assertFalse(FrontloadedEncoder.validate_image_size(
+            image_size, max_len + 1, hamming=True))
+
+    def test_min_image_size(self):
+        min_size = FrontloadedEncoder.min_image_size(5, hamming=True)
+        self.assertTrue(FrontloadedEncoder.validate_image_size(
+            min_size, 5, hamming=True))
+        self.assertFalse(FrontloadedEncoder.validate_image_size(
+            min_size - 256, 5, hamming=True))
+
+
+class TestDistributedHammingBitsRequired(unittest.TestCase):
+    """Distributed bits_required and max_message_len with hamming=True."""
+
+    def test_bits_required_greater_with_hamming(self):
+        without = DistributedEncoder.bits_required(5)
+        with_h = DistributedEncoder.bits_required(5, hamming=True)
+        self.assertGreater(with_h, without)
+
+    def test_max_message_len_less_with_hamming(self):
+        image_size = 50000
+        without = DistributedEncoder.max_message_len(image_size)
+        with_h = DistributedEncoder.max_message_len(image_size, hamming=True)
+        self.assertGreater(without, with_h)
+
+    def test_max_message_len_roundtrip(self):
+        image_size = 100000
+        max_len = DistributedEncoder.max_message_len(image_size, hamming=True)
+        self.assertGreater(max_len, 0)
+        self.assertTrue(DistributedEncoder.validate_image_size(
+            image_size, max_len, hamming=True))
+        self.assertFalse(DistributedEncoder.validate_image_size(
+            image_size, max_len + 1, hamming=True))
+
+
+class TestFrontloadedHammingDebugSections(unittest.TestCase):
+    """debug_sections() with hamming=True uses hamming_payload section."""
+
+    def setUp(self):
+        self.enc = FrontloadedEncoder(hamming=True)
+        self.enc.message = "hi"
+        self.sections = self.enc.debug_sections()
+        self.labels = [s["label"] for s in self.sections]
+
+    def test_section_labels(self):
+        self.assertEqual(
+            self.labels,
+            ["start_boundary", "hamming_payload", "end_boundary"],
+        )
+
+    def test_hamming_payload_has_blocks_count(self):
+        hp = next(s for s in self.sections if s["label"] == "hamming_payload")
+        # 2 chars + 1 checksum = 3 blocks
+        self.assertEqual(hp["blocks"], 3)
+
+    def test_hamming_payload_length_is_12_per_block(self):
+        hp = next(s for s in self.sections if s["label"] == "hamming_payload")
+        self.assertEqual(hp["length"], 3 * 12)
+
+    def test_offsets_are_contiguous(self):
+        for i in range(1, len(self.sections)):
+            expected = self.sections[i - 1]["offset"] + self.sections[i - 1]["length"]
+            self.assertEqual(self.sections[i]["offset"], expected)
+
+    def test_boundary_hex_is_ff02(self):
+        boundary_hex = BitArray(TemporalCloakConst.BOUNDARY_BITS_FEC).hex
+        self.assertEqual(self.sections[0]["hex"], boundary_hex)
+        self.assertEqual(self.sections[-1]["hex"], boundary_hex)
+
+
+class TestDistributedHammingDebugSections(unittest.TestCase):
+    """debug_sections() with hamming=True in distributed mode."""
+
+    def setUp(self):
+        self.enc = DistributedEncoder(hamming=True)
+        self.enc.message = "hi"
+        self.enc.generate_delays(100_000, key=42)
+        self.sections = self.enc.debug_sections()
+        self.labels = [s["label"] for s in self.sections]
+
+    def test_section_labels(self):
+        self.assertEqual(
+            self.labels,
+            ["start_boundary", "dist_key", "dist_msg_length",
+             "hamming_payload", "end_boundary"],
+        )
+
+    def test_boundary_hex_is_ff03(self):
+        boundary_hex = BitArray(TemporalCloakConst.BOUNDARY_BITS_DISTRIBUTED_FEC).hex
+        self.assertEqual(self.sections[0]["hex"], boundary_hex)
+        self.assertEqual(self.sections[-1]["hex"], boundary_hex)
+
+    def test_offsets_are_contiguous(self):
+        for i in range(1, len(self.sections)):
+            expected = self.sections[i - 1]["offset"] + self.sections[i - 1]["length"]
+            self.assertEqual(self.sections[i]["offset"], expected)
+
+
+class TestFrontloadedHammingSignalBits(unittest.TestCase):
+    """debug_signal_bits() with hamming=True."""
+
+    def setUp(self):
+        self.enc = FrontloadedEncoder(hamming=True)
+        self.enc.message = "hi"
+        self.signal = self.enc.debug_signal_bits()
+
+    def test_starts_with_fec_boundary(self):
+        boundary = BitArray(TemporalCloakConst.BOUNDARY_BITS_FEC)
+        self.assertEqual(self.signal[:len(boundary)], boundary)
+
+    def test_ends_with_fec_boundary(self):
+        boundary = BitArray(TemporalCloakConst.BOUNDARY_BITS_FEC)
+        self.assertEqual(self.signal[-len(boundary):], boundary)
+
+    def test_length_matches_sections(self):
+        sections = self.enc.debug_sections()
+        total = sum(s["length"] for s in sections)
+        self.assertEqual(len(self.signal), total)
+
+
+class TestHammingDelaysReset(unittest.TestCase):
+    """Setting message twice with hamming=True resets delays correctly."""
+
+    def test_delays_reset_on_reencode(self):
+        enc = FrontloadedEncoder(hamming=True)
+        enc.message = "first"
+        enc.message = "hi"
+        expected_bits = FrontloadedEncoder.bits_required(2, hamming=True)
+        self.assertEqual(len(enc.delays), expected_bits)
+
+
 if __name__ == '__main__':
     unittest.main()

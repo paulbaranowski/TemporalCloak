@@ -13,6 +13,10 @@ class TemporalCloakConst:
     # for these bits to reset itself.
     BOUNDARY_BITS = "0xFF00"
     BOUNDARY_BITS_DISTRIBUTED = "0xFF01"
+    BOUNDARY_BITS_FEC = "0xFF02"
+    BOUNDARY_BITS_DISTRIBUTED_FEC = "0xFF03"
+
+    HAMMING_BLOCK_SIZE = 12
 
     # This is used for the size of the data chunk sent by the server.
     # Without chunking the data, the download speed will be too slow.

@@ -14,6 +14,7 @@ import math
 import os
 import random
 import statistics
+import subprocess
 import sys
 import time
 import warnings
@@ -32,6 +33,32 @@ from temporal_cloak.metrics import compute_char_bit_errors
 from temporal_cloak.quote_provider import QuoteProvider
 
 console = Console()
+
+
+# ── Git version ────────────────────────────────────────────────────
+
+def get_git_version(label=None) -> dict:
+    """Capture current git commit, branch, and dirty status."""
+    version = {"commit": None, "branch": None, "dirty": None, "label": label}
+    try:
+        version["commit"] = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL, text=True,
+        ).strip()
+        version["branch"] = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            stderr=subprocess.DEVNULL, text=True,
+        ).strip()
+        dirty_staged = subprocess.run(
+            ["git", "diff", "--quiet"], stderr=subprocess.DEVNULL,
+        ).returncode != 0
+        dirty_cached = subprocess.run(
+            ["git", "diff", "--cached", "--quiet"], stderr=subprocess.DEVNULL,
+        ).returncode != 0
+        version["dirty"] = dirty_staged or dirty_cached
+    except (FileNotFoundError, subprocess.SubprocessError):
+        pass
+    return version
 
 
 # ── Server helpers ──────────────────────────────────────────────────
@@ -63,11 +90,12 @@ def pick_smallest_image(session: requests.Session, base_url: str) -> str:
     return smallest["filename"]
 
 
-def create_link(session: requests.Session, base_url: str, message: str, image: str, mode: str) -> str:
+def create_link(session: requests.Session, base_url: str, message: str, image: str,
+                mode: str, fec: bool = False) -> str:
     """POST /api/create and return the link ID."""
     resp = session.post(
         f"{base_url}/api/create",
-        json={"message": message, "image": image, "mode": mode},
+        json={"message": message, "image": image, "mode": mode, "fec": fec},
         timeout=30,
     )
     resp.raise_for_status()
@@ -125,6 +153,8 @@ def decode_link(session: requests.Session, base_url: str, link_id: str,
         "message_complete": decoder.message_complete,
         "checksum_valid": decoder.checksum_valid,
         "mode_detected": decoder.mode,
+        "hamming": decoder.hamming,
+        "hamming_corrections": decoder.hamming_corrections,
         "bit_count": decoder.bit_count,
         "bits_hex": decoder.bits.hex if decoder.bits else "",
         "threshold": decoder.threshold,
@@ -210,6 +240,8 @@ def build_run_data(result: dict, debug: dict, mode: str) -> dict:
     return {
         "mode_requested": mode,
         "mode_detected": result["mode_detected"],
+        "hamming": result.get("hamming"),
+        "hamming_corrections": result.get("hamming_corrections", 0),
         "original_message": server_message,
         "decoded_message": decoded_msg,
         "decode_success": result["message_complete"],
@@ -430,6 +462,51 @@ def print_summary(aggregates: list[dict]) -> None:
         console.print(err_table)
 
 
+# ── History ─────────────────────────────────────────────────────────
+
+def build_history_entry(aggregates, config, output_path, git_version, timestamp, runs_by_mode, all_runs) -> dict:
+    """Build a compact history entry from aggregate results."""
+    results = {}
+    for agg in aggregates:
+        label = agg["label"]
+        if agg["count"] == 0:
+            continue
+
+        # Sum total bit errors across runs for this mode
+        mode_runs = runs_by_mode.get(label, all_runs)
+        total_bit_errors = sum(r.get("mismatch_count", 0) for r in mode_runs)
+
+        results[label] = {
+            "count": agg["count"],
+            "success_rate": agg["success_rate"],
+            "checksum_pass_rate": agg["checksum_pass_rate"],
+            "exact_match_rate": agg["exact_match_rate"],
+            "bit_error_rate": agg["bit_error_rate"],
+            "total_bit_errors": total_bit_errors,
+            "char_bit_error_buckets": agg.get("char_bit_error_buckets", {}),
+            "confidence_mean": agg["confidence"]["mean"],
+            "bits_per_sec_mean": agg["bits_per_sec"]["mean"] if agg.get("bits_per_sec") else None,
+            "elapsed_seconds_mean": agg["elapsed_seconds"]["mean"] if agg.get("elapsed_seconds") else None,
+            "mode_detection_accuracy": agg["mode_detection_accuracy"],
+            "corrections": agg.get("corrections", 0),
+        }
+
+    return {
+        "timestamp": timestamp,
+        "version": git_version,
+        "config": config,
+        "results": results,
+        "report_file": output_path,
+    }
+
+
+def append_history(entry: dict, history_file: str) -> None:
+    """Append a single JSON line to the history file."""
+    os.makedirs(os.path.dirname(history_file) or ".", exist_ok=True)
+    with open(history_file, "a") as f:
+        f.write(json.dumps(entry, separators=(",", ":")) + "\n")
+
+
 # ── Main ────────────────────────────────────────────────────────────
 
 @click.command()
@@ -442,14 +519,19 @@ def print_summary(aggregates: list[dict]) -> None:
               help="JSON output path [default: data/benchmarks/<timestamp>.json].")
 @click.option("--seed", default=None, type=int, help="Random seed for reproducibility.")
 @click.option("--verbose", is_flag=True, help="Print per-run details.")
-def main(base_url, num_quotes, run_mode, output_path, seed, verbose):
+@click.option("--label", default=None, type=str, help="Label for this run (e.g. 'after threshold tuning').")
+@click.option("--history-file", default="data/benchmark_history.jsonl", type=click.Path(),
+              help="JSONL history file path.")
+@click.option("--fec/--no-fec", default=False, help="Enable Hamming(12,8) forward error correction.")
+def main(base_url, num_quotes, run_mode, output_path, seed, verbose, label, history_file, fec):
     """Benchmark decode accuracy across many messages."""
     from rich.live import Live
 
     base_url = base_url.rstrip("/")
 
     console.print(f"[bold]TemporalCloak Decode Benchmark[/bold]")
-    console.print(f"Server: {base_url}  Quotes: {num_quotes}  Mode: {run_mode}")
+    fec_label = "  FEC: Hamming(12,8)" if fec else ""
+    console.print(f"Server: {base_url}  Quotes: {num_quotes}  Mode: {run_mode}{fec_label}")
     if seed is not None:
         console.print(f"Seed: {seed}")
     console.print()
@@ -515,7 +597,7 @@ def main(base_url, num_quotes, run_mode, output_path, seed, verbose):
                     step=f"creating link: {short_msg}",
                 )
                 live.update(build_live_display(progress, tally, completed_runs, verbose))
-                link_id = create_link(session, base_url, quote, image, mode)
+                link_id = create_link(session, base_url, quote, image, mode, fec=fec)
 
                 # Print link URL above the live display so it persists
                 link_url = f"{base_url}/api/image/{link_id}"
@@ -590,6 +672,7 @@ def main(base_url, num_quotes, run_mode, output_path, seed, verbose):
             "mode": run_mode,
             "seed": seed,
             "image": image,
+            "fec": fec,
         },
         "aggregates": aggregates,
         "runs": all_runs,
@@ -599,6 +682,15 @@ def main(base_url, num_quotes, run_mode, output_path, seed, verbose):
         json.dump(report, f, indent=2)
 
     console.print(f"\n[dim]Report saved to {output_path}[/dim]")
+
+    # 8. Append to history file
+    git_version = get_git_version(label=label)
+    history_entry = build_history_entry(
+        aggregates, report["config"], output_path, git_version, report["timestamp"],
+        runs_by_mode, all_runs,
+    )
+    append_history(history_entry, history_file)
+    console.print(f"[dim]History appended to {history_file}[/dim]")
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ import random
 
 from bitstring import BitArray
 from temporal_cloak.const import TemporalCloakConst
+from temporal_cloak.fec import FecCodec, NoFec, HammingFec
 
 
 class TemporalCloakEncoding:
@@ -13,7 +14,9 @@ class TemporalCloakEncoding:
 
     BOUNDARY = TemporalCloakConst.BOUNDARY_BITS
 
-    def __init__(self):
+    def __init__(self, hamming=False):
+        self._hamming = hamming
+        self._fec: FecCodec = HammingFec() if hamming else NoFec()
         self._message = None
         self._message_encoded = None
         self._message_bits = None
@@ -63,13 +66,14 @@ class TemporalCloakEncoding:
         self._delays = []
         _, self._message_encoded = TemporalCloakEncoding.encode_message(self._message)
         self._message_bits = BitArray(self._message_encoded)
-        # Compute XOR checksum and append as 8 bits after message
         self._checksum = TemporalCloakEncoding.compute_checksum(self._message_encoded)
-        checksum_bits = BitArray(uint=self._checksum, length=8)
-        self._message_bits_padded = BitArray(self._message_bits)
-        self._message_bits_padded.append(checksum_bits)
-        self._message_bits_padded.prepend(self.BOUNDARY)
-        self._message_bits_padded.append(self.BOUNDARY)
+
+        payload_bytes = self._message_encoded + bytes([self._checksum])
+        encoded_payload = self._fec.encode_payload(payload_bytes)
+        self._message_bits_padded = BitArray(self.BOUNDARY)
+        self._message_bits_padded.append(encoded_payload)
+        self._message_bits_padded.append(BitArray(self.BOUNDARY))
+
         self._build_delays()
 
     @property
@@ -88,7 +92,6 @@ class TemporalCloakEncoding:
         """
         boundary = BitArray(self.BOUNDARY)
         boundary_len = len(boundary)
-        checksum_bits = BitArray(uint=self._checksum, length=8)
 
         sections = []
         offset = 0
@@ -106,24 +109,40 @@ class TemporalCloakEncoding:
         extra, offset = self._debug_preamble_sections(offset)
         sections.extend(extra)
 
-        sections.append({
-            "label": "message",
-            "bits": self._message_bits.bin,
-            "text": self._message,
-            "offset": offset,
-            "length": len(self._message_bits),
-        })
-        offset += len(self._message_bits)
+        payload_bytes = self._message_encoded + bytes([self._checksum])
+        encoded_payload = self._fec.encode_payload(payload_bytes)
 
-        sections.append({
-            "label": "checksum",
-            "bits": checksum_bits.bin,
-            "hex": checksum_bits.hex,
-            "value": self._checksum,
-            "offset": offset,
-            "length": 8,
-        })
-        offset += 8
+        if self._hamming:
+            sections.append({
+                "label": "hamming_payload",
+                "bits": encoded_payload.bin,
+                "text": self._message,
+                "checksum": self._checksum,
+                "blocks": len(payload_bytes),
+                "offset": offset,
+                "length": len(encoded_payload),
+            })
+            offset += len(encoded_payload)
+        else:
+            sections.append({
+                "label": "message",
+                "bits": self._message_bits.bin,
+                "text": self._message,
+                "offset": offset,
+                "length": len(self._message_bits),
+            })
+            offset += len(self._message_bits)
+
+            checksum_bits = BitArray(uint=self._checksum, length=8)
+            sections.append({
+                "label": "checksum",
+                "bits": checksum_bits.bin,
+                "hex": checksum_bits.hex,
+                "value": self._checksum,
+                "offset": offset,
+                "length": 8,
+            })
+            offset += 8
 
         sections.append({
             "label": "end_boundary",
@@ -141,12 +160,13 @@ class TemporalCloakEncoding:
         Subclasses override to include mode-specific preamble bits.
         """
         boundary = BitArray(self.BOUNDARY)
-        checksum_bits = BitArray(uint=self._checksum, length=8)
         result = BitArray()
         result.append(boundary)
         result.append(self._debug_preamble_bits())
-        result.append(self._message_bits)
-        result.append(checksum_bits)
+
+        payload_bytes = self._message_encoded + bytes([self._checksum])
+        result.append(self._fec.encode_payload(payload_bytes))
+
         result.append(boundary)
         return result
 
@@ -175,6 +195,12 @@ class FrontloadedEncoder(TemporalCloakEncoding):
     delivered contiguously from the start of the transmission.
     """
 
+    def __init__(self, hamming=False):
+        super().__init__(hamming=hamming)
+        if hamming:
+            self.BOUNDARY = TemporalCloakConst.BOUNDARY_BITS_FEC
+        # else: uses class-level BOUNDARY = BOUNDARY_BITS (0xFF00)
+
     def _build_delays(self) -> None:
         for bit in self._message_bits_padded:
             if bit:
@@ -184,36 +210,41 @@ class FrontloadedEncoder(TemporalCloakEncoding):
             self._delays.append(delay)
 
     @staticmethod
-    def bits_required(message_len: int) -> int:
-        """Total timing-delay slots: boundary(16) + payload + checksum(8) + boundary(16)."""
+    def bits_required(message_len: int, hamming=False) -> int:
+        """Total timing-delay slots: boundary(16) + payload + checksum + boundary(16)."""
+        fec = HammingFec() if hamming else NoFec()
         boundary_bits = len(BitArray(TemporalCloakConst.BOUNDARY_BITS))
-        return boundary_bits * 2 + message_len * 8 + 8
+        return boundary_bits * 2 + fec.payload_bits(message_len)
 
     @staticmethod
     def min_image_size(message_len: int,
-                       chunk_size: int = TemporalCloakConst.CHUNK_SIZE_TORNADO) -> int:
+                       chunk_size: int = TemporalCloakConst.CHUNK_SIZE_TORNADO,
+                       hamming=False) -> int:
         """Minimum image file size (bytes) to carry *message_len* characters."""
-        total_bits = FrontloadedEncoder.bits_required(message_len)
+        total_bits = FrontloadedEncoder.bits_required(message_len, hamming=hamming)
         chunks_needed = total_bits + 1
         return (chunks_needed - 1) * chunk_size + 1
 
     @staticmethod
     def validate_image_size(image_size: int, message_len: int,
-                            chunk_size: int = TemporalCloakConst.CHUNK_SIZE_TORNADO) -> bool:
+                            chunk_size: int = TemporalCloakConst.CHUNK_SIZE_TORNADO,
+                            hamming=False) -> bool:
         """Return True if image can carry the message."""
         available_chunks = math.ceil(image_size / chunk_size)
         available_slots = available_chunks - 1
-        return available_slots >= FrontloadedEncoder.bits_required(message_len)
+        return available_slots >= FrontloadedEncoder.bits_required(message_len, hamming=hamming)
 
     @staticmethod
     def max_message_len(image_size: int,
-                        chunk_size: int = TemporalCloakConst.CHUNK_SIZE_TORNADO) -> int:
+                        chunk_size: int = TemporalCloakConst.CHUNK_SIZE_TORNADO,
+                        hamming=False) -> int:
         """Maximum message length (characters) this image can carry."""
+        fec = HammingFec() if hamming else NoFec()
         available_chunks = math.ceil(image_size / chunk_size)
         available_slots = available_chunks - 1
         boundary_bits = len(BitArray(TemporalCloakConst.BOUNDARY_BITS))
-        overhead = boundary_bits * 2 + 8
-        return max(0, (available_slots - overhead) // 8)
+        overhead = boundary_bits * 2 + fec.block_size  # checksum block
+        return max(0, (available_slots - overhead) // fec.block_size)
 
     def __repr__(self):
         return f"FrontloadedEncoder(message='{self.message}')"
@@ -227,6 +258,12 @@ class DistributedEncoder(TemporalCloakEncoding):
     """
 
     BOUNDARY = TemporalCloakConst.BOUNDARY_BITS_DISTRIBUTED
+
+    def __init__(self, hamming=False):
+        super().__init__(hamming=hamming)
+        if hamming:
+            self.BOUNDARY = TemporalCloakConst.BOUNDARY_BITS_DISTRIBUTED_FEC
+        # else: uses class-level BOUNDARY = BOUNDARY_BITS_DISTRIBUTED (0xFF01)
 
     @staticmethod
     def compute_bit_positions(key: int, total_gaps: int, num_remaining_bits: int) -> list:
@@ -275,10 +312,9 @@ class DistributedEncoder(TemporalCloakEncoding):
         preamble_bits.append(BitArray(uint=key, length=TemporalCloakConst.DIST_KEY_BITS))
         preamble_bits.append(BitArray(uint=msg_len, length=TemporalCloakConst.DIST_LENGTH_BITS))
 
-        # Remaining bits: message payload + checksum + end boundary
-        remaining_data = BitArray(self._message_bits)
-        checksum = TemporalCloakEncoding.compute_checksum(self._message_encoded)
-        remaining_data.append(BitArray(uint=checksum, length=8))
+        # Remaining bits: FEC-encoded (message + checksum) + end boundary
+        payload_bytes = self._message_encoded + bytes([self._checksum])
+        remaining_data = self._fec.encode_payload(payload_bytes)
         remaining_data.append(BitArray(self.BOUNDARY))
 
         num_remaining_bits = len(remaining_data)
@@ -306,40 +342,45 @@ class DistributedEncoder(TemporalCloakEncoding):
         return delays
 
     @staticmethod
-    def bits_required(message_len: int) -> int:
+    def bits_required(message_len: int, hamming=False) -> int:
         """Total timing-delay slots including distributed preamble overhead."""
+        fec = HammingFec() if hamming else NoFec()
         boundary_bits = len(BitArray(TemporalCloakConst.BOUNDARY_BITS))
-        return (boundary_bits * 2 + message_len * 8 + 8
+        return (boundary_bits * 2 + fec.payload_bits(message_len)
                 + TemporalCloakConst.DIST_KEY_BITS
                 + TemporalCloakConst.DIST_LENGTH_BITS)
 
     @staticmethod
     def min_image_size(message_len: int,
-                       chunk_size: int = TemporalCloakConst.CHUNK_SIZE_TORNADO) -> int:
+                       chunk_size: int = TemporalCloakConst.CHUNK_SIZE_TORNADO,
+                       hamming=False) -> int:
         """Minimum image file size (bytes) to carry *message_len* characters."""
-        total_bits = DistributedEncoder.bits_required(message_len)
+        total_bits = DistributedEncoder.bits_required(message_len, hamming=hamming)
         chunks_needed = total_bits + 1
         return (chunks_needed - 1) * chunk_size + 1
 
     @staticmethod
     def validate_image_size(image_size: int, message_len: int,
-                            chunk_size: int = TemporalCloakConst.CHUNK_SIZE_TORNADO) -> bool:
+                            chunk_size: int = TemporalCloakConst.CHUNK_SIZE_TORNADO,
+                            hamming=False) -> bool:
         """Return True if image can carry the message."""
         available_chunks = math.ceil(image_size / chunk_size)
         available_slots = available_chunks - 1
-        return available_slots >= DistributedEncoder.bits_required(message_len)
+        return available_slots >= DistributedEncoder.bits_required(message_len, hamming=hamming)
 
     @staticmethod
     def max_message_len(image_size: int,
-                        chunk_size: int = TemporalCloakConst.CHUNK_SIZE_TORNADO) -> int:
+                        chunk_size: int = TemporalCloakConst.CHUNK_SIZE_TORNADO,
+                        hamming=False) -> int:
         """Maximum message length (characters) this image can carry."""
+        fec = HammingFec() if hamming else NoFec()
         available_chunks = math.ceil(image_size / chunk_size)
         available_slots = available_chunks - 1
         boundary_bits = len(BitArray(TemporalCloakConst.BOUNDARY_BITS))
-        overhead = (boundary_bits * 2 + 8
+        overhead = (boundary_bits * 2 + fec.block_size
                     + TemporalCloakConst.DIST_KEY_BITS
                     + TemporalCloakConst.DIST_LENGTH_BITS)
-        max_len = max(0, (available_slots - overhead) // 8)
+        max_len = max(0, (available_slots - overhead) // fec.block_size)
         return min(max_len, TemporalCloakConst.MAX_DISTRIBUTED_MSG_LEN)
 
     @property
