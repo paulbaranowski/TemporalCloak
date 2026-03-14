@@ -35,6 +35,7 @@ class TemporalCloakDecoding:
         self._hamming = False
         self._fec: FecCodec = NoFec()
         self._hamming_corrections = 0
+        self._hamming_corrected_indices: list[int] = []
         self._carry = 0.0
         self._carry_forward_enabled = carry_forward
         self._max_expected_delay = TemporalCloakConst.BIT_0_TIME_DELAY * max_delay_margin
@@ -180,10 +181,11 @@ class TemporalCloakDecoding:
                 )
             return ""
 
-        corrected_bytes, num_corrections = self._fec.decode_payload(payload_bits)
+        corrected_bytes, num_corrections, corrected_indices = self._fec.decode_payload(payload_bits)
         self._hamming_corrections = num_corrections
+        self._hamming_corrected_indices = corrected_indices
         if num_corrections > 0:
-            self.log(f"FEC corrected {num_corrections} bit(s)")
+            self.log(f"FEC corrected {num_corrections} byte(s)")
 
         if completed and len(corrected_bytes) > 1:
             message_bytes = corrected_bytes[:-1]
@@ -206,6 +208,10 @@ class TemporalCloakDecoding:
     @property
     def hamming_corrections(self) -> int:
         return self._hamming_corrections
+
+    @property
+    def hamming_corrected_indices(self) -> list[int]:
+        return self._hamming_corrected_indices
 
     def calibrate_from_boundary(self) -> None:
         """Use the first boundary marker (0xFF00 = 8 ones then 8 zeros) as a
@@ -789,6 +795,12 @@ class AutoDecoder:
         if self._delegate:
             return self._delegate._hamming_corrections
         return 0
+
+    @property
+    def hamming_corrected_indices(self) -> list[int]:
+        if self._delegate:
+            return self._delegate._hamming_corrected_indices
+        return []
 
     def try_correction(self, max_flips=8):
         """Attempt low-confidence bit correction on the delegate decoder."""

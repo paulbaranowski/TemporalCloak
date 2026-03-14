@@ -98,17 +98,26 @@ def _char_label(c: str) -> str:
     return repr(c) if ord(c) <= 127 else "'\\ufffd'"
 
 
-def _styled_message(msg: str) -> Text:
-    """Render a decoded message with visible space indicators (·)."""
+def _styled_message(msg: str, corrected_indices: list[int] | None = None) -> Text:
+    """Render a decoded message with visible space indicators (·).
+
+    Characters at positions in corrected_indices are underlined in yellow
+    to indicate Hamming FEC correction.
+    """
+    corrected = set(corrected_indices) if corrected_indices else set()
     text = Text()
-    for ch in msg:
-        if ch == " ":
+    for i, ch in enumerate(msg):
+        if i in corrected:
+            style = "bold yellow underline"
+        elif ch == " ":
             text.append("·", style="dim")
+            continue
         elif ord(ch) > 127:
-            # Surrogate-escaped or non-ASCII byte — show replacement char
             text.append("\ufffd", style="bold red")
+            continue
         else:
-            text.append(ch, style="bold white")
+            style = "bold white"
+        text.append(ch, style=style)
     return text
 
 
@@ -191,7 +200,6 @@ class DecodeSession:
             self._display_diagnostics()
 
         if self._debug:
-            self._display_debug_stats()
             self._display_server_comparison()
 
         self._save_timing_data()
@@ -200,6 +208,7 @@ class DecodeSession:
         """Build a dict of all timing data from the current decode session."""
         link_id = _extract_link_id(self._url)
         elapsed = time.monotonic() - self._start_time if self._start_time else 0.0
+        bit_count = self._cloak.bit_count if self._cloak else 0
 
         return {
             "version": 1,
@@ -214,7 +223,8 @@ class DecodeSession:
                 "mode": self._cloak.mode if self._cloak else None,
                 "hamming": self._cloak.hamming if self._cloak else None,
                 "hamming_corrections": self._cloak.hamming_corrections if self._cloak else 0,
-                "bit_count": self._cloak.bit_count if self._cloak else 0,
+                "hamming_corrected_indices": self._cloak.hamming_corrected_indices if self._cloak else [],
+                "bit_count": bit_count,
                 "bits_hex": self._cloak.bits.hex if self._cloak else "",
                 "threshold": self._cloak.threshold if self._cloak else 0.0,
                 "corrected": self._corrected_message is not None,
@@ -226,6 +236,7 @@ class DecodeSession:
                 "total_bytes": self._total_bytes,
                 "gap_count": self._gap_count,
                 "elapsed_seconds": round(elapsed, 3),
+                "bits_per_second": round(bit_count / elapsed, 2) if elapsed > 0 and bit_count > 0 else 0.0,
             },
             "server_config": self._server_config,
             "server_debug": None,
@@ -312,18 +323,28 @@ class DecodeSession:
     def _build_display(self, progress) -> Group:
         """Build the Rich renderable group (progress + stats + message panel)."""
         parts = []
-        parts.append(progress.get_renderable())
 
         stats = Table(show_header=False, border_style="dim", padding=(0, 1))
         stats.add_column("Key", style="dim", min_width=12)
         stats.add_column("Value", min_width=20)
 
+        # Mode
         mode = (self._cloak.mode or "detecting...") if self._cloak else "detecting..."
         if self._cloak and self._cloak.hamming:
             mode += " + Hamming"
         stats.add_row("Mode", mode)
-        stats.add_row("Bits decoded", str(self._cloak.bit_count) if self._cloak else "0")
 
+        # Server delays
+        if self._server_config:
+            bit1 = self._server_config.get("bit_1_delay", 0)
+            bit0 = self._server_config.get("bit_0_delay", 0)
+            stats.add_row("Server delays", f"bit1={bit1:.3f}s  bit0={bit0:.3f}s")
+
+        # Threshold
+        if self._cloak:
+            stats.add_row("Threshold", f"{self._cloak.threshold:.4f}s")
+
+        # Boundaries
         if self._cloak:
             collected, needed = self._cloak.bootstrap_progress
             if not self._cloak.start_boundary_found:
@@ -333,53 +354,81 @@ class DecodeSession:
             else:
                 stats.add_row("Boundaries", "[green]start: found[/green]  [green]end: found[/green]")
 
-        if self._server_config:
-            bit1 = self._server_config.get("bit_1_delay", 0)
-            bit0 = self._server_config.get("bit_0_delay", 0)
-            stats.add_row("Server delays", f"bit1={bit1:.3f}s  bit0={bit0:.3f}s")
+        # Total bytes, gaps, bits
+        stats.add_row("Total bytes", f"{self._total_bytes:,}")
+        stats.add_row("Gaps processed", str(self._gap_count))
+        stats.add_row("Bits decoded", str(self._cloak.bit_count) if self._cloak else "0")
 
-        if self._cloak:
-            stats.add_row("Threshold", f"{self._cloak.threshold:.4f}s")
-
-            scores = self._cloak.confidence_scores
-            if scores:
-                avg_conf = sum(scores) / len(scores)
-                stats.add_row("Confidence", f"{avg_conf:.1%}")
-
+        # Elapsed + throughput
         if self._start_time:
             elapsed = time.monotonic() - self._start_time
             stats.add_row("Elapsed", f"{elapsed:.1f}s")
+            bit_count = self._cloak.bit_count if self._cloak else 0
+            if elapsed > 0 and bit_count > 0:
+                bps = bit_count / elapsed
+                stats.add_row("Throughput", f"{bps:.1f} bits/s")
+
+        # Confidence
+        if self._cloak:
+            scores = self._cloak.confidence_scores
+            if scores:
+                avg_conf = sum(scores) / len(scores)
+                min_conf = min(scores)
+                stats.add_row("Confidence", f"avg {avg_conf:.1%}  min {min_conf:.1%}")
+
+        # FEC corrections (always shown when Hamming is active)
+        if self._cloak and self._cloak.hamming:
+            n = self._cloak.hamming_corrections
+            if n > 0:
+                all_idx = self._cloak.hamming_corrected_indices
+                msg_len = len(self._cloak.message)
+                n_checksum = sum(1 for i in all_idx if i >= msg_len)
+                if n_checksum:
+                    stats.add_row("FEC corrections", f"[yellow]{n} byte(s) ({n_checksum} in checksum)[/yellow]")
+                else:
+                    stats.add_row("FEC corrections", f"[yellow]{n} byte(s)[/yellow]")
+            else:
+                stats.add_row("FEC corrections", "[green]0[/green]")
 
         parts.append(stats)
 
         current_message = self._cloak.message if self._cloak else ""
         is_complete = self._cloak.message_complete if self._cloak else False
+        all_corrected = self._cloak.hamming_corrected_indices if self._cloak else []
+        msg_len = len(current_message)
+        corrected_indices = [i for i in all_corrected if i < msg_len]
 
-        if current_message or is_complete:
-            if is_complete:
-                checksum_ok = self._cloak.checksum_valid
-                if checksum_ok:
-                    status = Text(" checksum valid ", style="bold green")
-                    border = "green"
-                elif checksum_ok is False:
-                    status = Text(" checksum failed ", style="bold red")
-                    border = "red"
-                else:
-                    status = Text(" no checksum ", style="yellow")
-                    border = "yellow"
+        if is_complete:
+            checksum_ok = self._cloak.checksum_valid
+            if checksum_ok:
+                status = Text(" checksum valid ", style="bold green")
+                border = "green"
+            elif checksum_ok is False:
+                status = Text(" checksum failed ", style="bold red")
+                border = "red"
             else:
-                status = Text(" decoding... ", style="bold cyan")
-                border = "cyan"
+                status = Text(" no checksum ", style="yellow")
+                border = "yellow"
+        else:
+            status = Text(" decoding... ", style="bold cyan")
+            border = "cyan"
 
-            msg_text = _styled_message(current_message)
-            panel = Panel(
-                msg_text,
-                title="Message",
-                subtitle=status,
-                border_style=border,
-                padding=(1, 2),
-            )
-            parts.append(panel)
+        panel_parts = []
+        if not is_complete:
+            panel_parts.append(progress.get_renderable())
+        if current_message:
+            if panel_parts:
+                panel_parts.append(Text(""))
+            panel_parts.append(_styled_message(current_message, corrected_indices))
+        panel_body = Group(*panel_parts) if panel_parts else Text("")
+        panel = Panel(
+            panel_body,
+            title="Message",
+            subtitle=status,
+            border_style=border,
+            padding=(1, 2),
+        )
+        parts.append(panel)
 
         return Group(*parts)
 
@@ -435,37 +484,6 @@ class DecodeSession:
         self._console.print(diag)
         self._console.print("\n[dim]Possible causes: network jitter corrupted timing, "
                           "or server delays are too small for this connection.[/dim]")
-
-    def _display_debug_stats(self):
-        """Show debug statistics table."""
-        table = Table(title="Debug Stats", show_header=False, border_style="dim")
-        table.add_column("Key", style="dim")
-        table.add_column("Value")
-
-        mode = self._cloak.mode or "unknown"
-        if self._cloak.hamming:
-            mode += " + Hamming"
-        table.add_row("Mode", mode)
-        if self._cloak.hamming:
-            table.add_row("Hamming corrections", str(self._cloak.hamming_corrections))
-        table.add_row("Total bytes", f"{self._total_bytes:,}")
-        table.add_row("Gaps processed", str(self._gap_count))
-        table.add_row("Bits decoded", str(len(self._cloak.bits)))
-        table.add_row("Threshold", f"{self._cloak.threshold:.4f}s")
-
-        scores = self._cloak.confidence_scores
-        if scores:
-            avg_conf = sum(scores) / len(scores)
-            min_conf = min(scores)
-            table.add_row("Avg confidence", f"{avg_conf:.2%}")
-            table.add_row("Min confidence", f"{min_conf:.2%}")
-
-        if self._start_time:
-            elapsed = time.monotonic() - self._start_time
-            table.add_row("Total time", f"{elapsed:.1f}s")
-
-        self._console.print()
-        self._console.print(table)
 
     def _display_server_comparison(self):
         """Fetch server debug info and display char bit error histogram."""
@@ -867,8 +885,13 @@ def _timing_summary(console, data):
         table.add_row("Checksum", "[yellow]n/a[/yellow]")
 
     table.add_row("Threshold", f"{result.get('threshold', 0):.4f}s")
-    table.add_row("Elapsed", f"{timing.get('elapsed_seconds', 0):.1f}s")
-    table.add_row("Total bits", str(result.get("bit_count", 0)))
+    elapsed_seconds = timing.get("elapsed_seconds", 0)
+    bit_count = result.get("bit_count", 0)
+    table.add_row("Elapsed", f"{elapsed_seconds:.1f}s")
+    table.add_row("Total bits", str(bit_count))
+    if elapsed_seconds > 0 and bit_count > 0:
+        bps = bit_count / elapsed_seconds
+        table.add_row("Throughput", f"{bps:.1f} bits/s")
     table.add_row("Total bytes", f"{timing.get('total_bytes', 0):,}")
     table.add_row("Gap count", str(timing.get("gap_count", 0)))
 

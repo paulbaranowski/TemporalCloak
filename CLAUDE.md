@@ -48,18 +48,21 @@ uv run python scripts/benchmark.py --seed 42                # reproducible quote
 
 There are two encoding strategies, distinguished by how bits are placed across chunks:
 
-- **Frontloaded** — All message bits are packed into the first N chunks. Boundary marker: `0xFF00`. Simpler but detectable via timing analysis of early chunks.
-- **Distributed** — Bits are scattered across all chunks using a PRNG seed as a key. Boundary marker: `0xFF01`. Harder to detect but requires knowing total chunk count upfront.
+- **Frontloaded** — All message bits are packed into the first N chunks. Boundary marker: `0xFF00` (or `0xFF02` with Hamming FEC). Simpler but detectable via timing analysis of early chunks.
+- **Distributed** — Bits are scattered across all chunks using a PRNG seed as a key. Boundary marker: `0xFF01` (or `0xFF03` with Hamming FEC). Harder to detect but requires knowing total chunk count upfront.
 
 **Wire format:** `[BOUNDARY (16 bits)] [PREAMBLE*] [MESSAGE] [CHECKSUM (8 bits)] [BOUNDARY (16 bits)]`
 - Preamble: empty for frontloaded; key (8 bits) + length (8 bits) for distributed.
 - The last bit of the start boundary distinguishes mode (0 = frontloaded, 1 = distributed).
+- With Hamming FEC enabled, message + checksum bytes are each encoded as 12-bit Hamming(12,8) blocks (50% overhead, single-bit error correction per byte).
 
 ### Core Package (`temporal_cloak/`)
 
 - **Encoding** (`encoding.py`) — `TemporalCloakEncoding` base class with `FrontloadedEncoder` and `DistributedEncoder` subclasses. Converts string → bit array → delay sequence. Encoders expose `debug_sections()` and `debug_signal_bits()` for introspection.
 - **Decoding** (`decoding.py`) — `TemporalCloakDecoding` base with `FrontloadedDecoder`, `DistributedDecoder`, and `AutoDecoder`. `AutoDecoder` detects mode from the last bit of the boundary marker, then delegates to the appropriate decoder. Accumulates bits via `mark_time()`, finds boundary markers, decodes bit stream back to text. Uses adaptive threshold calibration from boundary marker timing.
-- **Constants** (`const.py`) — `TemporalCloakConst`: protocol constants (bit delays, midpoint threshold, boundary marker, chunk size). Timing values configurable via `TC_BIT_1_DELAY`, `TC_BIT_0_DELAY`, `TC_MIDPOINT` env vars.
+- **FEC** (`fec.py`) — Forward error correction abstraction. `NullFec` (passthrough) and `HammingFec` (Hamming(12,8)) codecs. Selected by boundary marker: `0xFF02`/`0xFF03` activate Hamming.
+- **Hamming** (`hamming.py`) — Hamming(12,8) implementation. Encodes each 8-bit byte into a 12-bit block with 4 parity bits (positions 1, 2, 4, 8). Corrects any single-bit error per block.
+- **Constants** (`const.py`) — `TemporalCloakConst`: protocol constants (bit delays, midpoint threshold, boundary markers, chunk size). Four boundary markers: `0xFF00` (frontloaded), `0xFF01` (distributed), `0xFF02` (frontloaded+FEC), `0xFF03` (distributed+FEC). Timing values configurable via `TC_BIT_1_DELAY`, `TC_BIT_0_DELAY`, `TC_MIDPOINT` env vars.
 - **CLI** (`cli.py`) — Click-based CLI with `decode`, `debug`, and `timing` commands. Uses Rich for rendering. Saves timing data to `data/timing/`.
 - **LinkStore** (`link_store.py`) — SQLite-backed storage for shareable links. DB location: `TC_DB_PATH` env var (default: `data/links.db`).
 - **QuoteProvider** (`quote_provider.py`) — Loads quotes from `content/quotes/quotes.json`.
@@ -104,7 +107,7 @@ The encoding/decoding roles are swapped between demos: in Demo 1 the client enco
 
 - Messages are ASCII-only; `encode_message()` rejects non-ASCII with a `UnicodeEncodeError` check
 - `bitstring` library is used for bit-level operations (`BitArray`, `BitStream`, `Bits`)
-- Boundary markers (`0xFF00`/`0xFF01`) are chosen to never collide with ASCII payload bytes
+- Boundary markers (`0xFF00`/`0xFF01`/`0xFF02`/`0xFF03`) are chosen to never collide with ASCII payload bytes
 - Demo 2 uses Tornado's async `flush()` with `asyncio.sleep()` for non-blocking delays
 - All imports use package-qualified paths: `from temporal_cloak.encoding import TemporalCloakEncoding`
 - CLI entry point defined in pyproject.toml: `temporal-cloak = temporal_cloak.cli:cli`

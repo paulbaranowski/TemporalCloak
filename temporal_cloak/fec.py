@@ -30,12 +30,13 @@ class FecCodec:
         """Encode raw bytes (message + checksum) into FEC-protected bits."""
         return BitArray(data)
 
-    def decode_payload(self, bits: BitArray) -> tuple[bytes, int]:
+    def decode_payload(self, bits: BitArray) -> tuple[bytes, int, list[int]]:
         """Decode FEC-protected bits back to raw bytes.
 
-        Returns (decoded_bytes, num_corrections).
+        Returns (decoded_bytes, num_corrections, corrected_indices).
+        corrected_indices lists the 0-based byte positions that were corrected.
         """
-        return bits.tobytes(), 0
+        return bits.tobytes(), 0, []
 
     def payload_bits(self, message_len: int) -> int:
         """Number of encoded bits for a message of *message_len* characters.
@@ -56,7 +57,7 @@ class FecCodec:
         if len(candidate_bits) % self.block_size != 0:
             return False
         try:
-            decoded_bytes, _ = self.decode_payload(candidate_bits)
+            decoded_bytes, _, _ = self.decode_payload(candidate_bits)
         except (ValueError, Exception):
             return False
         if len(decoded_bytes) < 2:
@@ -122,6 +123,6 @@ class HammingFec(FecCodec):
         from temporal_cloak.hamming import hamming_encode_message
         return hamming_encode_message(data)
 
-    def decode_payload(self, bits: BitArray) -> tuple[bytes, int]:
+    def decode_payload(self, bits: BitArray) -> tuple[bytes, int, list[int]]:
         from temporal_cloak.hamming import hamming_decode_message
         return hamming_decode_message(bits)

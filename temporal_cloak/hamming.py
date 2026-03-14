@@ -102,10 +102,12 @@ def hamming_encode_message(data: bytes) -> BitArray:
     return result
 
 
-def hamming_decode_message(bits: BitArray) -> tuple[bytes, int]:
+def hamming_decode_message(bits: BitArray) -> tuple[bytes, int, list[int]]:
     """Decode concatenated 12-bit Hamming blocks back to bytes.
 
-    Returns (decoded_bytes, total_corrections).
+    Returns (decoded_bytes, total_corrections, corrected_indices).
+    corrected_indices is the list of block indices (0-based) that had a
+    bit corrected.
     Raises ValueError if len(bits) is not a multiple of 12.
     """
     if len(bits) % 12 != 0:
@@ -115,10 +117,13 @@ def hamming_decode_message(bits: BitArray) -> tuple[bytes, int]:
 
     result = bytearray()
     total_corrections = 0
+    corrected_indices: list[int] = []
     for i in range(0, len(bits), 12):
         block = bits[i:i + 12]
         byte_val, corrections = hamming_decode_block(block)
         result.append(byte_val)
         total_corrections += corrections
+        if corrections > 0:
+            corrected_indices.append(i // 12)
 
-    return bytes(result), total_corrections
+    return bytes(result), total_corrections, corrected_indices
