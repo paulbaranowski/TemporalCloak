@@ -1,5 +1,6 @@
 from bitstring import Bits, BitStream, BitArray
 from temporal_cloak.const import TemporalCloakConst
+from temporal_cloak.fec import FecCodec, NoFec, HammingFec
 import time
 import warnings
 
@@ -31,6 +32,9 @@ class TemporalCloakDecoding:
         self._adaptive_threshold = None
         self._confidence_scores = []
         self._checksum_valid = None
+        self._hamming = False
+        self._fec: FecCodec = NoFec()
+        self._hamming_corrections = 0
         self._carry = 0.0
         self._carry_forward_enabled = carry_forward
         self._max_expected_delay = TemporalCloakConst.BIT_0_TIME_DELAY * max_delay_margin
@@ -163,6 +167,46 @@ class TemporalCloakDecoding:
         self.log(decoded_message)
         return decoded_message
 
+    def _decode_payload(self, payload_bits, completed) -> str:
+        """Decode payload bits, applying FEC correction if active."""
+        if not self._hamming:
+            return self.decode(payload_bits, completed)
+
+        if len(payload_bits) % self._fec.block_size != 0:
+            if completed:
+                warnings.warn(
+                    f"FEC payload ({len(payload_bits)} bits) not aligned to "
+                    f"{self._fec.block_size}-bit blocks"
+                )
+            return ""
+
+        corrected_bytes, num_corrections = self._fec.decode_payload(payload_bits)
+        self._hamming_corrections = num_corrections
+        if num_corrections > 0:
+            self.log(f"FEC corrected {num_corrections} bit(s)")
+
+        if completed and len(corrected_bytes) > 1:
+            message_bytes = corrected_bytes[:-1]
+            checksum_byte = corrected_bytes[-1]
+            computed = 0
+            for b in message_bytes:
+                computed ^= b
+            if computed != checksum_byte:
+                warnings.warn("Checksum mismatch — message may be corrupted")
+                self._checksum_valid = False
+            else:
+                self._checksum_valid = True
+            decoded = message_bytes.decode('ascii', errors='surrogateescape')
+        else:
+            decoded = corrected_bytes.decode('ascii', errors='surrogateescape')
+
+        self.log(decoded)
+        return decoded
+
+    @property
+    def hamming_corrections(self) -> int:
+        return self._hamming_corrections
+
     def calibrate_from_boundary(self) -> None:
         """Use the first boundary marker (0xFF00 = 8 ones then 8 zeros) as a
         calibration preamble. Compute the average observed delay for each group
@@ -197,29 +241,29 @@ class TemporalCloakDecoding:
             self.calibrate_from_boundary()
 
         completed = False
-        begin_pos = TemporalCloakDecoding.find_boundary(self._bits, boundary_hex=self.BOUNDARY)
+        exact_begin = TemporalCloakDecoding.find_boundary(self._bits, boundary_hex=self.BOUNDARY)
         # Also try fuzzy — a corrupted start boundary may exist earlier than
         # the exact match (which could be the intact end boundary instead).
         fuzzy_begin = TemporalCloakDecoding.find_boundary_fuzzy(
             self._bits, boundary_hex=self.BOUNDARY, max_errors=2)
-        if fuzzy_begin is not None and (begin_pos is None or fuzzy_begin < begin_pos):
-            begin_pos = fuzzy_begin
-        if begin_pos is None:
+        start_pos = exact_begin
+        if fuzzy_begin is not None and (start_pos is None or fuzzy_begin < start_pos):
+            start_pos = fuzzy_begin
+        if start_pos is None:
             self._eom = None
             return "", False, None
-        begin_pos += self.BOUNDARY_LEN
+        begin_pos = start_pos + self.BOUNDARY_LEN
         # Skip any extra preamble bits (e.g. key + length in distributed mode)
         begin_pos += self._preamble_extra_bits
         end_pos = TemporalCloakDecoding.find_boundary(self._bits, begin_pos, boundary_hex=self.BOUNDARY)
         if end_pos is None:
             # Fallback: fuzzy match for a corrupted end boundary.
-            # Only accept if the resulting payload is byte-aligned and passes checksum.
+            # Only accept if the resulting payload is properly aligned and passes checksum.
             fuzzy_pos = TemporalCloakDecoding.find_boundary_fuzzy(
                 self._bits, begin_pos, boundary_hex=self.BOUNDARY, max_errors=2)
             while fuzzy_pos is not None:
                 candidate = self._bits[begin_pos:fuzzy_pos]
-                if (len(candidate) > 8 and len(candidate) % 8 == 0
-                        and self.verify_checksum(candidate[:-8], candidate[-8:])):
+                if self._fec.validate_candidate(candidate):
                     end_pos = fuzzy_pos
                     break
                 # Try the next fuzzy match
@@ -233,14 +277,30 @@ class TemporalCloakDecoding:
             self._eom = None
             message = self._bits[begin_pos:]
 
-        # Bit alignment check
-        if completed and len(message) % 8 != 0:
+        # If fuzzy start produced a misaligned payload, fall back to exact start.
+        # The fuzzy search can find false positives before the real boundary,
+        # adding extra bits that break FEC block alignment.
+        block_size = self._fec.block_size
+        if (completed and len(message) % block_size != 0
+                and exact_begin is not None and start_pos != exact_begin):
+            alt_begin = exact_begin + self.BOUNDARY_LEN + self._preamble_extra_bits
+            alt_end = TemporalCloakDecoding.find_boundary(
+                self._bits, alt_begin, boundary_hex=self.BOUNDARY)
+            if alt_end is not None:
+                alt_message = self._bits[alt_begin:alt_end]
+                if len(alt_message) % block_size == 0:
+                    begin_pos = alt_begin
+                    end_pos = alt_end
+                    message = alt_message
+                    self._eom = end_pos
+
+        if completed and len(message) % block_size != 0:
             warnings.warn(
-                f"Message bits ({len(message)}) not aligned to 8-bit boundary. "
+                f"Message bits ({len(message)}) not aligned to {block_size}-bit boundary. "
                 f"Possible bit corruption."
             )
 
-        decoded = self.decode(message, completed)
+        decoded = self._decode_payload(message, completed)
         if completed:
             self._last_message = decoded
         return decoded, completed, end_pos
@@ -416,8 +476,8 @@ class DistributedDecoder(TemporalCloakDecoding):
         preamble = TemporalCloakConst.PREAMBLE_BITS
         msg_len = self._bits[boundary_len + TemporalCloakConst.DIST_KEY_BITS:preamble].uint
 
-        # Remaining bits: message payload + checksum (8) + end boundary (16)
-        remaining_bits = msg_len * 8 + 8 + boundary_len
+        # Remaining bits: FEC-encoded (message + checksum) + end boundary (16)
+        remaining_bits = self._fec.payload_bits(msg_len) + boundary_len
 
         self._bit_positions = set(
             DistributedEncoder.compute_bit_positions(
@@ -656,14 +716,18 @@ class AutoDecoder:
         if len(self._bootstrap_delays) < boundary_len:
             return time_diff
 
-        # We have 16 delays — determine mode from the last bit
+        # We have 16 delays — determine mode and FEC from the last two bits
         ones_delays = self._bootstrap_delays[0:8]
         zeros_delays = self._bootstrap_delays[8:16]
         avg_one = sum(ones_delays) / len(ones_delays)
         avg_zero = sum(zeros_delays) / len(zeros_delays)
         threshold = (avg_one + avg_zero) / 2.0
 
+        # Bit 15 (last): mode (0=frontloaded, 1=distributed)
+        # Bit 14 (second-to-last): FEC (0=none, 1=hamming)
         last_bit = 1 if self._bootstrap_delays[-1] <= threshold else 0
+        second_last_bit = 1 if self._bootstrap_delays[-2] <= threshold else 0
+        hamming = bool(second_last_bit)
 
         if last_bit == 1:
             self._mode = "distributed"
@@ -679,6 +743,15 @@ class AutoDecoder:
                 carry_forward=self._carry_forward,
                 max_delay_margin=self._max_delay_margin,
                 max_carry_fraction=self._max_carry_fraction)
+
+        # Configure FEC on the delegate
+        self._delegate._hamming = hamming
+        self._delegate._fec = HammingFec() if hamming else NoFec()
+        if hamming:
+            if last_bit == 1:
+                self._delegate.BOUNDARY = TemporalCloakConst.BOUNDARY_BITS_DISTRIBUTED_FEC
+            else:
+                self._delegate.BOUNDARY = TemporalCloakConst.BOUNDARY_BITS_FEC
 
         # Replay collected delays into the delegate directly via add_bit_by_delay.
         # This avoids timing issues since mark_time() uses time.monotonic().
@@ -703,6 +776,19 @@ class AutoDecoder:
         if new_len > self._prev_bits_len:
             self._prev_bits_len = new_len
             self._bit_count += 1
+
+    @property
+    def hamming(self) -> bool | None:
+        """Whether Hamming FEC is active, or None if not yet detected."""
+        if self._delegate:
+            return self._delegate._hamming
+        return None
+
+    @property
+    def hamming_corrections(self) -> int:
+        if self._delegate:
+            return self._delegate._hamming_corrections
+        return 0
 
     def try_correction(self, max_flips=8):
         """Attempt low-confidence bit correction on the delegate decoder."""

@@ -5,11 +5,11 @@ from temporal_cloak.encoding import FrontloadedEncoder
 
 
 class TemporalCloakClient:
-    def __init__(self, host: str = '127.0.0.1', port: int = 1234):
+    def __init__(self, host: str = '127.0.0.1', port: int = 1234, hamming: bool = False):
         self._host = host
         self._port = port
         self._sock = None
-        self._cloak = FrontloadedEncoder()
+        self._cloak = FrontloadedEncoder(hamming=hamming)
 
     @property
     def host(self) -> str:

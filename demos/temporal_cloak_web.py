@@ -47,8 +47,9 @@ class ImageHandler(tornado.web.RequestHandler):
         quote = quote_provider.get_encodable_quote()
         logger.info("Encoding quote: %s", quote)
 
+        fec = self.get_argument("fec", "0") == "1"
         image_size = os.path.getsize(image.path)
-        cloak = DistributedEncoder()
+        cloak = DistributedEncoder(hamming=fec)
         cloak.message = quote
         distributed_delays = cloak.generate_delays(image_size)
 
@@ -189,6 +190,8 @@ class ImageListHandler(tornado.web.RequestHandler):
                         "max_message_len": DistributedEncoder.max_message_len(file_size),
                         "max_message_len_frontloaded": FrontloadedEncoder.max_message_len(file_size),
                         "max_message_len_distributed": DistributedEncoder.max_message_len(file_size),
+                        "max_message_len_frontloaded_fec": FrontloadedEncoder.max_message_len(file_size, hamming=True),
+                        "max_message_len_distributed_fec": DistributedEncoder.max_message_len(file_size, hamming=True),
                     }
                 )
         self.set_header("Content-Type", "application/json")
@@ -242,12 +245,13 @@ class CreateLinkHandler(tornado.web.RequestHandler):
             self.write({"error": "Invalid mode (must be 'frontloaded' or 'distributed')"})
             return
 
+        fec = bool(body.get("fec", False))
         encoder_cls = FrontloadedEncoder if mode == "frontloaded" else DistributedEncoder
 
         # Validate image is large enough to carry the message
         image_size = os.path.getsize(real_image)
-        if not encoder_cls.validate_image_size(image_size, len(message)):
-            max_chars = encoder_cls.max_message_len(image_size)
+        if not encoder_cls.validate_image_size(image_size, len(message), hamming=fec):
+            max_chars = encoder_cls.max_message_len(image_size, hamming=fec)
             self.set_status(400)
             self.write({
                 "error": f"Message too long for this image. "
@@ -274,6 +278,7 @@ class CreateLinkHandler(tornado.web.RequestHandler):
             burn_after_reading=burn_after_reading,
             mode=mode,
             dist_key=dist_key,
+            fec=fec,
         )
         logger.info(
             "Created link %s: message='%s', image='%s', burn=%s",
@@ -328,13 +333,14 @@ class EncodedImageHandler(tornado.web.RequestHandler):
 
         image_size = os.path.getsize(link["image_path"])
         mode = link.get("mode", "distributed")
+        fec = bool(link.get("fec", 0))
 
         if mode == "frontloaded":
-            cloak = FrontloadedEncoder()
+            cloak = FrontloadedEncoder(hamming=fec)
             cloak.message = link["message"]
             delays = list(cloak.delays)
         else:
-            cloak = DistributedEncoder()
+            cloak = DistributedEncoder(hamming=fec)
             cloak.message = link["message"]
             delays = cloak.generate_delays(image_size, key=link.get("dist_key"))
 
@@ -372,14 +378,15 @@ class DebugLinkHandler(tornado.web.RequestHandler):
 
         message = link["message"]
         mode = link.get("mode", "distributed")
+        fec = bool(link.get("fec", 0))
         image_size = os.path.getsize(link["image_path"])
         chunk_size = TemporalCloakConst.CHUNK_SIZE_TORNADO
 
         if mode == "frontloaded":
-            encoder = FrontloadedEncoder()
+            encoder = FrontloadedEncoder(hamming=fec)
             encoder.message = message
         else:
-            encoder = DistributedEncoder()
+            encoder = DistributedEncoder(hamming=fec)
             encoder.message = message
             encoder.generate_delays(image_size, key=link.get("dist_key"))
 
@@ -390,6 +397,7 @@ class DebugLinkHandler(tornado.web.RequestHandler):
             "id": link_id,
             "message": message,
             "mode": mode,
+            "fec": fec,
             "image_filename": link["image_filename"],
             "image_size": image_size,
             "total_chunks": math.ceil(image_size / chunk_size),
@@ -579,6 +587,8 @@ class DecodeWebSocketHandler(tornado.websocket.WebSocketHandler):
                             "threshold": round(decoder.threshold, 6),
                             "elapsed": round(elapsed, 3),
                             "mode": decoder.mode,
+                            "hamming": decoder.hamming,
+                            "hamming_corrections": decoder.hamming_corrections,
                         }
                     )
                     link_store.mark_delivered(self.link_id)

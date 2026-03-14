@@ -456,5 +456,156 @@ class TestCrossBoundary(unittest.TestCase):
             self.assertNotEqual(result, "secret")
 
 
+# ── Hamming(12,8) FEC round-trip tests ───────────────────────────────
+
+
+class TestFrontloadedHammingRoundTrip(unittest.TestCase):
+    """Frontloaded round-trip with hamming=True."""
+
+    def test_short_message(self):
+        encoder = FrontloadedEncoder(hamming=True)
+        encoder.message = "hi"
+
+        from temporal_cloak.fec import HammingFec
+        decoder = FrontloadedDecoder()
+        decoder._hamming = True
+        decoder._fec = HammingFec()
+        decoder.BOUNDARY = TemporalCloakConst.BOUNDARY_BITS_FEC
+
+        for delay in encoder.delays:
+            decoder.add_bit_by_delay(delay)
+
+        result, completed, _ = decoder.bits_to_message()
+        self.assertTrue(completed)
+        self.assertEqual(result, "hi")
+        self.assertTrue(decoder.checksum_valid)
+
+    def test_longer_message(self):
+        encoder = FrontloadedEncoder(hamming=True)
+        encoder.message = "TemporalCloak works!"
+
+        from temporal_cloak.fec import HammingFec
+        decoder = FrontloadedDecoder()
+        decoder._hamming = True
+        decoder._fec = HammingFec()
+        decoder.BOUNDARY = TemporalCloakConst.BOUNDARY_BITS_FEC
+
+        for delay in encoder.delays:
+            decoder.add_bit_by_delay(delay)
+
+        result, completed, _ = decoder.bits_to_message()
+        self.assertTrue(completed)
+        self.assertEqual(result, "TemporalCloak works!")
+        self.assertTrue(decoder.checksum_valid)
+
+
+class TestDistributedHammingRoundTrip(unittest.TestCase):
+    """Distributed round-trip with hamming=True."""
+
+    def _round_trip(self, message, image_size=50000):
+        import math
+        import time
+        chunk_size = 256
+        encoder = DistributedEncoder(hamming=True)
+        encoder.message = message
+        delays = encoder.generate_delays(image_size, chunk_size)
+        total_gaps = math.ceil(image_size / chunk_size) - 1
+
+        from temporal_cloak.fec import HammingFec
+        decoder = DistributedDecoder(total_gaps)
+        decoder._hamming = True
+        decoder._fec = HammingFec()
+        decoder.BOUNDARY = TemporalCloakConst.BOUNDARY_BITS_DISTRIBUTED_FEC
+
+        decoder._start_time = decoder._last_recv_time = time.monotonic()
+        for delay in delays:
+            decoder._last_recv_time -= delay
+            decoder.mark_time()
+            if decoder.completed:
+                break
+        return decoder._last_message, decoder.completed, decoder
+
+    def test_short_message(self):
+        msg, completed, decoder = self._round_trip("hi")
+        self.assertTrue(completed)
+        self.assertEqual(msg, "hi")
+        self.assertTrue(decoder.checksum_valid)
+
+    def test_longer_message(self):
+        msg, completed, decoder = self._round_trip("TemporalCloak!", image_size=100000)
+        self.assertTrue(completed)
+        self.assertEqual(msg, "TemporalCloak!")
+        self.assertTrue(decoder.checksum_valid)
+
+
+class TestAutoDecoderHammingRoundTrip(unittest.TestCase):
+    """AutoDecoder correctly detects and decodes hamming=True streams."""
+
+    def test_frontloaded_hamming(self):
+        import time
+        encoder = FrontloadedEncoder(hamming=True)
+        encoder.message = "hello"
+
+        decoder = AutoDecoder(total_gaps=0)
+        decoder._start_time = decoder._last_recv_time = time.monotonic()
+
+        for delay in encoder.delays:
+            decoder._last_recv_time -= delay
+            decoder.mark_time()
+            if decoder.completed:
+                break
+
+        self.assertEqual(decoder.mode, "frontloaded")
+        self.assertTrue(decoder.hamming)
+        self.assertTrue(decoder.completed)
+        self.assertEqual(decoder._last_message, "hello")
+        self.assertTrue(decoder.checksum_valid)
+
+    def test_distributed_hamming(self):
+        import math
+        import time
+        encoder = DistributedEncoder(hamming=True)
+        encoder.message = "hello"
+        image_size = 100000
+        chunk_size = 256
+        delays = encoder.generate_delays(image_size, chunk_size)
+        total_gaps = math.ceil(image_size / chunk_size) - 1
+
+        decoder = AutoDecoder(total_gaps)
+        decoder._start_time = decoder._last_recv_time = time.monotonic()
+
+        for delay in delays:
+            decoder._last_recv_time -= delay
+            decoder.mark_time()
+            if decoder.message_complete:
+                break
+
+        self.assertEqual(decoder.mode, "distributed")
+        self.assertTrue(decoder.hamming)
+        self.assertTrue(decoder.message_complete)
+        self.assertEqual(decoder.message, "hello")
+        self.assertTrue(decoder.checksum_valid)
+
+    def test_non_hamming_still_works(self):
+        """Backward compatibility: non-Hamming encode → AutoDecoder decodes."""
+        import time
+        encoder = FrontloadedEncoder(hamming=False)
+        encoder.message = "hello"
+
+        decoder = AutoDecoder(total_gaps=0)
+        decoder._start_time = decoder._last_recv_time = time.monotonic()
+
+        for delay in encoder.delays:
+            decoder._last_recv_time -= delay
+            decoder.mark_time()
+            if decoder.completed:
+                break
+
+        self.assertEqual(decoder.mode, "frontloaded")
+        self.assertFalse(decoder.hamming)
+        self.assertEqual(decoder._last_message, "hello")
+        self.assertTrue(decoder.checksum_valid)
+
+
 if __name__ == '__main__':
     unittest.main()

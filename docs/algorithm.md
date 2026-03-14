@@ -80,16 +80,46 @@ An 8-bit XOR checksum is computed over the raw payload bytes and appended after 
 
 1. **Start timer** on the first received chunk (this chunk carries no timing information).
 2. **Mark time** on each subsequent chunk: measure the elapsed time since the previous chunk.
-3. **Classify** each delay as `1` (≤ threshold) or `0` (> threshold), appending to a bit stream.
+3. **Classify** each delay as `1` (≤ threshold) or `0` (> threshold), appending to a bit stream. Record a confidence score for each bit.
 4. **Calibrate** (adaptive threshold): once 16 bits have been received, the decoder uses the first boundary marker (`0xFF00` = 8 ones then 8 zeros) as a calibration preamble. It averages the delays for the `1` group and `0` group, then sets the threshold to their midpoint. All bits are then reclassified with this calibrated threshold.
-5. **Search** the accumulated bit stream for boundary markers.
+5. **Search** the accumulated bit stream for boundary markers (exact match first, then fuzzy match allowing up to 2 bit errors).
 6. **Extract** the payload between the opening and closing boundaries.
 7. **Verify** the checksum (last 8 bits of payload) against the message bytes.
-8. **Decode** the remaining bits as ASCII text.
+8. **Decode** the remaining bits as text (using `surrogateescape` for non-ASCII byte resilience).
+9. **Correct** (if checksum failed): attempt low-confidence bit correction by flipping the least confident bits and re-checking the checksum.
 
 ### Confidence Tracking
 
-For each classified bit, the decoder computes a confidence score based on how far the observed delay is from the decision threshold. Bits with confidence below 0.2 are logged as low-confidence, aiding in diagnostics.
+For each classified bit, the decoder computes a confidence score based on how far the observed delay is from the decision threshold. Bits with confidence below 0.2 are logged as low-confidence, aiding in diagnostics. Confidence scores are also used by the post-decode error correction system (see below).
+
+### Fuzzy Boundary Matching
+
+Network jitter can corrupt not just payload bits but boundary markers themselves. If even one bit of a 16-bit boundary marker is flipped, exact matching fails and the decoder cannot find the message frame.
+
+**The mechanism:** `find_boundary_fuzzy()` scans the bit stream using Hamming distance, accepting any 16-bit window with at most `max_errors` (default 2) bit differences from the expected boundary pattern.
+
+The decoder uses a two-pass strategy:
+
+1. **Start boundary**: Try exact match first, then fuzzy. If the fuzzy match finds a position *earlier* than the exact match, prefer the fuzzy result — the exact match may actually be the intact *end* boundary, while the corrupted *start* boundary was missed.
+2. **End boundary**: Try exact match first. If that fails, try fuzzy — but only accept a fuzzy end boundary if the resulting payload is byte-aligned and passes the XOR checksum. This prevents false positives from random bit patterns that happen to resemble a boundary.
+
+The checksum validation on fuzzy end boundaries is critical: a 16-bit pattern with 2-bit tolerance matches roughly 1 in 480 random positions, so without the checksum gate, false matches would be common.
+
+### Low-Confidence Bit Correction
+
+When a message completes but fails checksum validation, the decoder can attempt to recover by flipping the bits it is least confident about. This repurposes the existing checksum as an **error correction oracle** — it can't identify *which* bits are wrong, but it validates whether a correction attempt succeeded.
+
+**The mechanism:** `try_correct_low_confidence_bits()` sorts all bits by confidence score (ascending) and takes the `max_flips` (default 8) least confident as candidates. It then tries:
+
+1. **Single flips** — flip each candidate bit one at a time (up to 8 attempts)
+2. **Pair flips** — flip every pair of candidate bits (up to 28 attempts)
+3. **Triple flips** — flip every triple of candidate bits (up to 56 attempts)
+
+After each flip, the decoder re-runs `bits_to_message()` and checks the checksum. The first combination that produces a valid checksum wins. If no combination works, the original bits are restored.
+
+**Why this works:** Network jitter typically corrupts bits near the decision threshold — exactly the bits with low confidence scores. By targeting those bits first, the search space is small enough for brute-force (92 total attempts for 8 candidates) while covering the most likely error patterns. The 8-bit XOR checksum has a 1/256 false positive rate per attempt, making accidental matches unlikely across 92 trials.
+
+**Limitations:** The approach can correct at most 3 bit errors in the message payload. Beyond that, the combinatorial explosion makes brute-force impractical, and the checksum's false positive rate becomes a concern. For higher error rates, forward error correction (e.g., Hamming codes) would be needed.
 
 ### Carry-Forward Delay Compensation
 
@@ -110,14 +140,17 @@ Gap A absorbed ~190ms of extra delay, stealing it from gap B. The 110ms observed
 
 **The mechanism:** The decoder knows the maximum intentional delay (`BIT_0_TIME_DELAY × max_delay_margin`). When a corrected delay exceeds this cap, the excess is carried forward and added to the next gap's measurement before classification. The cap is only used for carry-forward decisions — bit classification still uses the midpoint threshold.
 
+**Carry cap:** Carry is clamped to `threshold × max_carry_fraction` (default 0.5) after each overflow. Without this cap, a single very large delay (e.g., 500ms when expecting 300ms) can accumulate enough carry to flip the *next* clean bit. For example, a 500ms gap produces 170ms of carry — enough to push a clean 1ms `1`-bit above the 175ms midpoint, misclassifying it as `0`. The cap limits carry to ~78ms (175ms × 0.5), which is too small to flip a clean bit but still enough to correct a shifted neighbor.
+
 ```python
 max_expected = server_config.bit_0_delay * 1.1   # 330ms with 10% margin
+max_carry = threshold * 0.5                       # carry cap
 carry = 0.0
 
 for each raw_delay in gaps:
     corrected = raw_delay + carry
     if corrected > max_expected:
-        carry = corrected - max_expected
+        carry = min(corrected - max_expected, max_carry)  # clamp carry
         corrected = max_expected
     else:
         carry = 0.0
@@ -144,9 +177,10 @@ Without carry-forward, gap B (110ms) falls below the 175ms midpoint and decodes 
 
 **In distributed mode**, carry is reset on filler gaps (gaps that don't carry message bits). This prevents stale carry values from leaking across non-adjacent message bits, since scattered bit positions may be separated by many filler gaps.
 
-**Configuration:** Carry-forward is controlled by two parameters on all decoder classes:
+**Configuration:** Carry-forward is controlled by three parameters on all decoder classes:
 - `carry_forward` (default: `True`) — enables or disables compensation
 - `max_delay_margin` (default: `1.1`) — multiplier on `BIT_0_TIME_DELAY` to set the cap
+- `max_carry_fraction` (default: `0.5`) — maximum carry as a fraction of threshold, prevents oversized delays from flipping subsequent clean bits
 
 ## Encoding Modes
 
@@ -286,7 +320,7 @@ It then instantiates the appropriate decoder and replays the collected delays.
 
 ### Client-Encoder: Raw TCP Sockets
 
-The client sends **one random byte per bit**, with the delay between sends encoding the message. The server receives bytes one at a time and measures inter-arrival times. Uses frontloaded encoding.
+The client sends **one random byte per bit**, with the delay between sends encoding the message. The server receives bytes one at a time and measures inter-arrival times. Uses frontloaded encoding. The server uses `StreamingFrontloadedDecoder`, a subclass that truncates the bit buffer after each completed message to support multiple messages on the same TCP connection.
 
 ```mermaid
 sequenceDiagram
@@ -380,6 +414,83 @@ This is intentionally slow — covert channels trade bandwidth for stealth.
 
 In distributed mode, the total transmission time is dominated by the image transfer itself, since most gaps are zero-delay filler. The message bits are spread across the full duration rather than concentrated at the start, trading slightly more total time for significantly better stealth.
 
+## Hamming(12,8) Forward Error Correction
+
+TemporalCloak supports optional Hamming(12,8) forward error correction (FEC), which encodes redundancy directly into the transmitted bits. When enabled, the decoder can automatically correct single-bit errors per byte *before* the checksum is checked — complementing the existing post-decode error correction.
+
+### Scheme
+
+Each 8-bit data byte is encoded into a 12-bit Hamming codeword by inserting 4 parity bits at positions that are powers of 2:
+
+```
+Position (1-indexed):  1   2   3   4   5   6   7   8   9  10  11  12
+Bit:                  p1  p2  d1  p4  d2  d3  d4  p8  d5  d6  d7  d8
+```
+
+Each parity bit covers positions whose binary index has that power-of-2 bit set:
+- p1 (pos 1): covers positions 1, 3, 5, 7, 9, 11
+- p2 (pos 2): covers positions 2, 3, 6, 7, 10, 11
+- p4 (pos 4): covers positions 4, 5, 6, 7, 12
+- p8 (pos 8): covers positions 8, 9, 10, 11, 12
+
+On decode, the decoder computes a 4-bit syndrome from the parity checks. A zero syndrome means no errors. A nonzero syndrome identifies the exact position of a single-bit error, which is then flipped to recover the original data.
+
+### Wire Format Signaling
+
+The boundary marker's last 2 bits encode both encoding mode and FEC:
+
+| Boundary | Bit 15 (mode) | Bit 14 (FEC) | Meaning |
+|----------|---------------|--------------|---------|
+| `0xFF00` | 0 | 0 | Frontloaded, no FEC |
+| `0xFF01` | 1 | 0 | Distributed, no FEC |
+| `0xFF02` | 0 | 1 | Frontloaded + Hamming |
+| `0xFF03` | 1 | 1 | Distributed + Hamming |
+
+This is backward compatible: old decoders searching for `0xFF00`/`0xFF01` won't match the FEC variants.
+
+### Frame Format with Hamming
+
+```
+┌──────────────┬───────────────────┬────────────────────────────────┬──────────────┐
+│   Boundary   │    Preamble*      │      Hamming Payload           │   Boundary   │
+│  0xFF02/03   │  (distributed     │  (message + checksum)          │  0xFF02/03   │
+│  (16 bits)   │   only: key+len)  │  N × 12 bits                   │  (16 bits)   │
+└──────────────┴───────────────────┴────────────────────────────────┴──────────────┘
+```
+
+- Boundaries are **not** Hamming-encoded — they serve as calibration patterns
+- The checksum is computed on raw message bytes, then the combined `message_bytes + checksum_byte` are Hamming-encoded together as a sequence of 12-bit blocks
+- After Hamming decoding, the standard checksum verification still runs as a second validation layer
+- Overhead: 50% more bits per character (8→12 bits per byte)
+
+### Interaction with Existing Error Correction
+
+Hamming FEC and the existing error correction layers stack without interference:
+
+1. **Hamming (per-block)**: Corrects single-bit errors within each 12-bit block automatically during decode. This happens *before* checksum verification.
+2. **Checksum verification**: After Hamming decode, the XOR checksum validates the entire message. If Hamming miscorrected a 2-bit error (producing a wrong byte), the checksum catches it.
+3. **Low-confidence bit correction**: If the checksum still fails, the existing brute-force correction runs on the raw timing-derived bits and re-calls `bits_to_message()`, which internally does Hamming decode again. This catches errors that Hamming missed (e.g., 2+ bit errors in a single block).
+
+### Auto-Detection
+
+The `AutoDecoder` detects FEC from the boundary marker during bootstrap. After collecting 16 timing delays, it examines:
+- Bit 15 (last bit): encoding mode (0=frontloaded, 1=distributed)
+- Bit 14 (second-to-last): FEC (0=none, 1=Hamming)
+
+No decoder-side flag is needed — FEC is fully auto-detected from the wire format.
+
+### Capacity Impact
+
+Hamming increases the per-byte cost from 8 to 12 bits (50% overhead). For the same image, the maximum message length is reduced:
+
+| Image Size | Max chars (no FEC) | Max chars (Hamming) |
+|------------|-------------------|---------------------|
+| 50 KB      | ~24 (frontloaded) | ~15 (frontloaded)   |
+| 100 KB     | ~48 (frontloaded) | ~31 (frontloaded)   |
+| 500 KB     | ~244 (frontloaded)| ~162 (frontloaded)  |
+
+The distributed mode 255-character limit (8-bit preamble length field) still applies.
+
 ## Future Work
 
 Several advanced techniques could enhance TemporalCloak's bandwidth and robustness:
@@ -395,7 +506,7 @@ Instead of encoding within a single image's chunk gaps, future work could measur
 - **Frequency domain modulation**: Encode information in the frequency spectrum of timing patterns rather than just delay durations. Instead of binary delay lengths, create timing sequences with different frequency characteristics (e.g., high-frequency rapid delays vs. low-frequency spaced delays) that can be detected through spectral analysis. This allows encoding information in both the timing and frequency domains for higher bandwidth.
 - **Phase modulation**: Vary the relative timing phase between different packet streams
 - **Adaptive modulation**: Dynamically adjust encoding parameters based on detected network conditions and jitter patterns
-- **Error correction coding**: Add forward error correction to improve reliability over lossy network conditions
+- **Forward error correction**: Hamming(12,8) FEC is now implemented as an optional feature (see above). Future work could add stronger codes like Reed-Solomon for correcting multi-bit burst errors at the cost of higher overhead
 
 ## Conclusion
 
@@ -406,7 +517,7 @@ TemporalCloak is best understood as a practical, production-style example of cov
 - **Real-world deployment**: Running as a systemd service on a public VPS with TLS termination
 - **Dual transmission modes**: Supporting both client-initiated (TCP sockets) and server-initiated (HTTP image transfers) covert communication
 - **Automatic mode detection**: Self-identifying encoding schemes through boundary marker analysis
-- **Robust error handling**: Adaptive threshold calibration, carry-forward delay compensation, and checksum validation for reliable operation over lossy networks
+- **Robust error handling**: Adaptive threshold calibration, carry-forward delay compensation with carry cap, fuzzy boundary matching, confidence-based bit correction, and checksum validation for reliable operation over lossy networks
 
 ### Contributions to the Field
 TemporalCloak advances covert timing channel research by providing a complete, deployable system that addresses practical challenges in real-world network environments. It demonstrates how timing steganography can achieve reliable communication while maintaining the covert nature that makes these channels difficult to detect.

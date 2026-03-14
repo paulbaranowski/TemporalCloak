@@ -22,6 +22,16 @@ from temporal_cloak.metrics import compute_char_bit_errors
 
 DEFAULT_URL = "https://temporalcloak.cloud/api/image"
 
+SERVER_ALIASES = {
+    "local": "http://localhost:8888",
+    "prod": "https://temporalcloak.cloud",
+}
+
+
+def _resolve_server(value: str) -> str:
+    """Resolve server aliases ('local', 'prod') or pass through a full URL."""
+    return SERVER_ALIASES.get(value.lower(), value).rstrip("/")
+
 
 def _extract_link_id(url):
     """Extract the link ID from a view URL, API URL, or bare ID.
@@ -158,20 +168,11 @@ class DecodeSession:
                     progress.update(task, advance=1)
                     live.update(self._build_display(progress))
 
-        # Snapshot the raw decoded message before correction mutates _last_message
-        self._raw_message = self._cloak.message if self._cloak else ""
-
-        # Attempt low-confidence bit correction if checksum failed
-        self._corrected_message = None
-        self._flipped_indices = []
-        if self._cloak.message_complete and self._cloak.checksum_valid is False:
-            self._corrected_message, self._flipped_indices = self._cloak.try_correction()
+        self._attempt_correction()
 
         self._console.print()
         if self._corrected_message:
-            # Count actual character-level bit differences corrected
-            char_diffs = compute_char_bit_errors(self._raw_message, self._corrected_message)
-            bits_corrected = sum(char_diffs["per_char"])
+            bits_corrected = self._count_bits_corrected()
             self._console.print(
                 Panel(
                     _styled_message(self._corrected_message),
@@ -211,6 +212,8 @@ class DecodeSession:
                 "message_complete": self._cloak.message_complete if self._cloak else False,
                 "checksum_valid": self._cloak.checksum_valid if self._cloak else None,
                 "mode": self._cloak.mode if self._cloak else None,
+                "hamming": self._cloak.hamming if self._cloak else None,
+                "hamming_corrections": self._cloak.hamming_corrections if self._cloak else 0,
                 "bit_count": self._cloak.bit_count if self._cloak else 0,
                 "bits_hex": self._cloak.bits.hex if self._cloak else "",
                 "threshold": self._cloak.threshold if self._cloak else 0.0,
@@ -293,6 +296,19 @@ class DecodeSession:
             self._cloak.mark_time()
         self._gap_count += 1
 
+    def _attempt_correction(self):
+        """Snapshot the raw message and attempt bit-flip correction if checksum failed."""
+        self._raw_message = self._cloak.message if self._cloak else ""
+        self._corrected_message = None
+        self._flipped_indices = []
+        if self._cloak.message_complete and self._cloak.checksum_valid is False:
+            self._corrected_message, self._flipped_indices = self._cloak.try_correction()
+
+    def _count_bits_corrected(self):
+        """Count total bit-level errors between raw and corrected messages."""
+        char_diffs = compute_char_bit_errors(self._raw_message, self._corrected_message)
+        return sum(errors for _, _, errors in char_diffs["per_char"])
+
     def _build_display(self, progress) -> Group:
         """Build the Rich renderable group (progress + stats + message panel)."""
         parts = []
@@ -303,6 +319,8 @@ class DecodeSession:
         stats.add_column("Value", min_width=20)
 
         mode = (self._cloak.mode or "detecting...") if self._cloak else "detecting..."
+        if self._cloak and self._cloak.hamming:
+            mode += " + Hamming"
         stats.add_row("Mode", mode)
         stats.add_row("Bits decoded", str(self._cloak.bit_count) if self._cloak else "0")
 
@@ -425,7 +443,11 @@ class DecodeSession:
         table.add_column("Value")
 
         mode = self._cloak.mode or "unknown"
+        if self._cloak.hamming:
+            mode += " + Hamming"
         table.add_row("Mode", mode)
+        if self._cloak.hamming:
+            table.add_row("Hamming corrections", str(self._cloak.hamming_corrections))
         table.add_row("Total bytes", f"{self._total_bytes:,}")
         table.add_row("Gaps processed", str(self._gap_count))
         table.add_row("Bits decoded", str(len(self._cloak.bits)))
@@ -652,7 +674,7 @@ def debug_link(url):
 
 
 @cli.command()
-@click.option("--server", default="https://temporalcloak.cloud", help="Server base URL.")
+@click.option("--server", default="prod", help="Server: 'local', 'prod', or a full URL.")
 @click.option("--bit-1-delay", type=float, default=None, help="Delay for bit 1 (short delay).")
 @click.option("--bit-0-delay", type=float, default=None, help="Delay for bit 0 (long delay).")
 @click.option("--midpoint", type=float, default=None, help="Decision threshold between bit 1 and bit 0.")
@@ -663,7 +685,8 @@ def config(server, bit_1_delay, bit_0_delay, midpoint):
     sends a PUT to update the values (partial updates are supported).
     """
     console = Console()
-    config_url = f"{server.rstrip('/')}/api/config"
+    server = _resolve_server(server)
+    config_url = f"{server}/api/config"
 
     updates = {}
     if bit_1_delay is not None:
@@ -710,15 +733,16 @@ def config(server, bit_1_delay, bit_0_delay, midpoint):
               help="Encoding mode (default: distributed).")
 @click.option("--image", "image_mode", type=click.Choice(["smallest", "random"]), default="smallest",
               help="Image selection strategy (default: smallest).")
-@click.option("--server", default=DEFAULT_URL.rsplit("/api", 1)[0], help="Server base URL.")
-def create(message, mode, image_mode, server):
+@click.option("--server", default="prod", help="Server: 'local', 'prod', or a full URL.")
+@click.option("--fec/--no-fec", default=False, help="Enable Hamming(12,8) forward error correction.")
+def create(message, mode, image_mode, server, fec):
     """Create a shareable link with a hidden message.
 
     The message is encoded into an image's chunk timing on the server.
     By default, picks the smallest image that can carry the message.
     """
     console = Console()
-    server = server.rstrip("/")
+    server = _resolve_server(server)
 
     # Fetch available images
     try:
@@ -734,7 +758,8 @@ def create(message, mode, image_mode, server):
         sys.exit(1)
 
     # Pick an image
-    max_len_key = f"max_message_len_{mode}"
+    fec_suffix = "_fec" if fec else ""
+    max_len_key = f"max_message_len_{mode}{fec_suffix}"
     if image_mode == "random":
         import random
         eligible = [img for img in images if img.get(max_len_key, 0) >= len(message)]
@@ -758,7 +783,7 @@ def create(message, mode, image_mode, server):
             sys.exit(1)
 
     # Create the link
-    payload = {"message": message, "image": chosen["filename"], "mode": mode}
+    payload = {"message": message, "image": chosen["filename"], "mode": mode, "fec": fec}
     try:
         resp = requests.post(f"{server}/api/create", json=payload, timeout=10)
         resp.raise_for_status()
@@ -780,6 +805,7 @@ def create(message, mode, image_mode, server):
     table.add_column("Value")
     table.add_row("Link ID", link_id)
     table.add_row("Mode", mode)
+    table.add_row("FEC", "Hamming(12,8)" if fec else "none")
     table.add_row("Image", chosen["filename"])
     table.add_row("Message", message)
     table.add_row("View URL", view_url)
