@@ -377,6 +377,7 @@ class TestSaveTimingData(unittest.TestCase):
         cloak.confidence_scores = [0.9, 0.8]
         cloak.hamming = False
         cloak.hamming_corrections = 0
+        cloak.hamming_corrected_indices = []
         session._cloak = cloak
         session._raw_message = "test"
         session._total_bytes = 5000

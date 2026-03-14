@@ -364,7 +364,6 @@
             font-size: 0.75rem;
             cursor: pointer;
             transition: background 0.2s;
-            display: none;
         }
 
         .replay-btn:hover { background: #2a2a3a; }
@@ -543,6 +542,14 @@
             <p>The two modes use slightly different boundary markers (<span class="code">0xFF00</span> for front-loaded, <span class="code">0xFF01</span> for distributed), so the decoder automatically detects which mode was used &mdash; no configuration needed.</p>
         </div>
 
+        <!-- Error Correction -->
+        <div class="highlight-card">
+            <h3>Error Correction: Hamming FEC</h3>
+            <p>Network jitter can flip a bit &mdash; a delay that should have been short arrives just above the threshold, or vice versa. A single flipped bit corrupts an entire character. To combat this, TemporalCloak supports <strong>Hamming(12,8) forward error correction</strong>.</p>
+            <p>Each 8-bit byte is encoded into a 12-bit block by adding 4 parity bits. These parity bits allow the decoder to detect <em>and correct</em> any single-bit error per byte &mdash; automatically, with no retransmission needed. The cost is 50% more bits on the wire, but for a timing channel where each bit takes ~100ms, reliability matters far more than throughput.</p>
+            <p>The boundary marker signals whether FEC is active: <span class="code">0xFF02</span> for front-loaded + Hamming, <span class="code">0xFF03</span> for distributed + Hamming. The decoder detects this automatically and applies error correction before assembling the message.</p>
+        </div>
+
         <!-- Not Just for the Web -->
         <div class="highlight-card">
             <h3>Not Just for the Web</h3>
@@ -622,7 +629,6 @@
             senderBits.innerHTML = '';
             recvBits.innerHTML = '';
             recvText.textContent = '';
-            replayBtn.style.display = 'none';
             imageLabel.textContent = 'Receiving image data';
 
             // Reset image — fully hidden
@@ -693,7 +699,6 @@
                     hideChunkIndicator();
                     imageLabel.textContent = 'Image received';
                     recvText.textContent = '"Hi"';
-                    replayBtn.style.display = '';
                     animRunning = false;
                     return;
                 }
@@ -776,7 +781,6 @@
             });
 
             recvText.textContent = '"Hi"';
-            replayBtn.style.display = '';
         } else {
             resetAnimation();
 

@@ -98,14 +98,14 @@ class TestHammingEncodeDecodeMessage(unittest.TestCase):
     def test_empty_message(self):
         encoded = hamming_encode_message(b"")
         self.assertEqual(len(encoded), 0)
-        decoded, corrections = hamming_decode_message(encoded)
+        decoded, corrections, _ = hamming_decode_message(encoded)
         self.assertEqual(decoded, b"")
         self.assertEqual(corrections, 0)
 
     def test_single_byte(self):
         encoded = hamming_encode_message(b"A")
         self.assertEqual(len(encoded), 12)
-        decoded, corrections = hamming_decode_message(encoded)
+        decoded, corrections, _ = hamming_decode_message(encoded)
         self.assertEqual(decoded, b"A")
         self.assertEqual(corrections, 0)
 
@@ -113,7 +113,7 @@ class TestHammingEncodeDecodeMessage(unittest.TestCase):
         msg = b"Hello, World!"
         encoded = hamming_encode_message(msg)
         self.assertEqual(len(encoded), len(msg) * 12)
-        decoded, corrections = hamming_decode_message(encoded)
+        decoded, corrections, _ = hamming_decode_message(encoded)
         self.assertEqual(decoded, msg)
         self.assertEqual(corrections, 0)
 
@@ -123,7 +123,7 @@ class TestHammingEncodeDecodeMessage(unittest.TestCase):
         msg = msg[:255]
         encoded = hamming_encode_message(msg)
         self.assertEqual(len(encoded), 255 * 12)
-        decoded, corrections = hamming_decode_message(encoded)
+        decoded, corrections, _ = hamming_decode_message(encoded)
         self.assertEqual(decoded, msg)
         self.assertEqual(corrections, 0)
 
@@ -146,9 +146,10 @@ class TestHammingMessageWithErrors(unittest.TestCase):
             # Flip a different position in each block
             flip_pos = i * 12 + (i % 12)
             corrupted.invert(flip_pos)
-        decoded, corrections = hamming_decode_message(corrupted)
+        decoded, corrections, corrected_idx = hamming_decode_message(corrupted)
         self.assertEqual(decoded, msg)
         self.assertEqual(corrections, len(msg))
+        self.assertEqual(corrected_idx, list(range(len(msg))))
 
     def test_error_in_some_blocks_only(self):
         """Flip 1 bit in only some blocks."""
@@ -158,14 +159,15 @@ class TestHammingMessageWithErrors(unittest.TestCase):
         # Corrupt blocks 0 and 3 only
         corrupted.invert(0 * 12 + 5)
         corrupted.invert(3 * 12 + 9)
-        decoded, corrections = hamming_decode_message(corrupted)
+        decoded, corrections, corrected_idx = hamming_decode_message(corrupted)
         self.assertEqual(decoded, msg)
         self.assertEqual(corrections, 2)
+        self.assertEqual(corrected_idx, [0, 3])
 
     def test_clean_message_zero_corrections(self):
         msg = b"No errors here"
         encoded = hamming_encode_message(msg)
-        decoded, corrections = hamming_decode_message(encoded)
+        decoded, corrections, _ = hamming_decode_message(encoded)
         self.assertEqual(decoded, msg)
         self.assertEqual(corrections, 0)
 
